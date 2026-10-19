@@ -98,6 +98,11 @@ Commands use `CompositorCommand` enum with backend-specific implementations.
 - **Icons**: SVGs in `crates/assets/icons/`, loaded via GPUI asset system
 - **Logging**: `tracing` macros, enable with `RUST_LOG=debug`
 - **Styling**: Pure GPUI builder patterns (no CSS)
+- **Architecture diagram**: `docs/public/architecture.svg` is hand-maintained
+  SVG. When a change adds, removes or renames a service, a window or a crate,
+  update its box in the same change, following the layout grid and classes in
+  the file's header comment, and keep
+  `docs/src/content/docs/developer/architecture.md` in step
 
 ## Tech Stack
 
