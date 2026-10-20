@@ -9,9 +9,10 @@ Developer docs live in [`docs/src/content/docs/developer/`](docs/src/content/doc
 - **[Development setup](docs/src/content/docs/developer/setup.md)**:
   build, run, test, profile, and code conventions.
 - **[Architecture](docs/src/content/docs/developer/architecture.md)**:
-  how the crates, services and windows fit together, with the
-  [diagram](docs/public/architecture.svg). Read it before your first
-  non-trivial change.
+  how the crates, services and windows fit together. Read it before your
+  first non-trivial change.
+
+[![GPUi Shell architecture](docs/public/architecture.svg)](docs/public/architecture.svg)
 
 The quick version:
 
