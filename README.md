@@ -82,6 +82,12 @@ Full documentation is available at **https://andre-brandao.github.io/gpui-shell/
 - [Installation](https://andre-brandao.github.io/gpui-shell/guides/installation/)
 - [Configuration](https://andre-brandao.github.io/gpui-shell/reference/configuration/)
 
+## Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for the plan to 1.0, and the
+[open design discussions](https://github.com/andre-brandao/gpui-shell/issues?q=is%3Aissue%20state%3Aopen%20label%3Adesign)
+to vote and share ideas.
+
 ## Thanks
 
 - [zed](https://github.com/zed-industries/zed): rendering and ui design (gpui).
