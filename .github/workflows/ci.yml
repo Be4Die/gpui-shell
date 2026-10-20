@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  # push:
+  #   branches: [main, dev]
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Format, clippy, tests & nix build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'flake.lock', '**/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # Enter the dev shell once so later steps don't each pay for it.
+      - name: Prepare dev shell
+        run: nix develop --command true
+
+      # Cheapest first, so a formatting slip fails in seconds.
+      - name: Format
+        run: nix develop --command cargo fmt --all --check
+      - name: Clippy
+        run: nix develop --command cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: nix develop --command cargo test --workspace
+      - name: Nix build
+        run: nix build .#default --print-build-logs

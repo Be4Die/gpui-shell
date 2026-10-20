@@ -1,0 +1,304 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1520" height="924" viewBox="0 0 1520 924" role="img" aria-labelledby="title desc">
+<!--
+  GPUi Shell: architecture overview. Hand-maintained SVG, written by Claude; agents keep it
+  in sync (see AGENTS.md), but plain edits on the grid below work just as well.
+
+  Source of truth: crates/*/Cargo.toml (who depends on whom), crates/services/src/lib.rs
+  (the services), crates/app/src/main.rs (what boots) and every `cx.open_window` call
+  (the windows). A service or window added or removed there gets a box added or removed
+  here, in the same PR.
+
+  Layout (viewBox 1520 x 924, columns left to right):
+    x   24–244   OUTSIDE THE PROCESS   rows y 100 / 212 / 292 / 388 / 484 / 596
+    x  268–620   crates/services       frame y 84–476; boxes x 284–604 on the same rows
+    x  660–1132  crates/app            frame y 84–676
+                   x 676–872   glue    AppState, watch, panel.rs, keybinds, Config, ipc
+                   x 882       signal bus feeding every window
+                   x 892–1116  windows Bar, Dock, Panels, Launcher, OSD, popups
+    x 1164–1496  crates/ui + assets    frame y 84–676
+    y  708–900   INSIDE EVERY SERVICE  the lifecycle loop, left to right
+
+  CSS classes:
+    .bg   background         .frame dashed crate frame   .h    column header
+    .t    box title          .s     detail (monospace)   .g    frame title
+    .lbl  edge label
+    .sys  outside the process (white)   .svc service (blue)      .app app glue (purple)
+    .win  layer-shell window (yellow)   .ui  ui / assets (green) .ext dev-only (dashed grey)
+    .edge data / events (grey)          .cmd command (dashed orange)
+  Colours are literal hex on purpose: some viewers can't resolve var().
+-->
+  <title id="title">GPUi Shell architecture</title>
+  <desc id="desc">One process. crates/services talks to everything outside it: D-Bus daemons, compositor IPC, PulseAudio, PipeWire, udev and desktop files, each through a service that holds its state in a Mutable. crates/app holds every service in the AppState global; state::watch turns their signals into re-renders of the layer-shell windows: per-display bar and dock, panels, launcher, OSD and notification popups. Windows send commands back with dispatch. Config and theme files are hot-reloaded with inotify, and a second gpuishell invocation reaches the running one through a unix socket. crates/ui provides the components, shell patterns and theme the windows render with; crates/assets the icons; crates/story is a dev-only gallery.</desc>
+  <style>
+    .bg{fill:#f6f8fa}
+    .frame{fill:#ffffff;fill-opacity:.55;stroke:#d0d7de;stroke-dasharray:6 4}
+    .sys{fill:#ffffff;stroke:#d0d7de}
+    .svc{fill:#ddf4ff;stroke:#54aeff}
+    .app{fill:#fbefff;stroke:#c297ff}
+    .win{fill:#fff8c5;stroke:#d4a72c}
+    .ui{fill:#dafbe1;stroke:#4ac26b}
+    .ext{fill:#f6f8fa;stroke:#8c959f;stroke-dasharray:5 4}
+    .t{fill:#1f2328;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+    .g{fill:#1f2328;font:600 14px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+    .h{fill:#656d76;font:600 11px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;letter-spacing:.8px}
+    .s{fill:#656d76;font:11px ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+    .lbl{fill:#656d76;font:italic 10.5px -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+    .edge{fill:none;stroke:#8c959f;stroke-width:1.5}
+    .cmd{fill:none;stroke:#fb8f44;stroke-width:1.5;stroke-dasharray:5 4}
+    .head{fill:#8c959f}
+    .head-c{fill:#fb8f44}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0d1117}
+      .frame{fill:#161b22;fill-opacity:.5;stroke:#30363d}
+      .sys{fill:#161b22;stroke:#30363d}
+      .svc{fill:#0c2d6b;stroke:#1f6feb}
+      .app{fill:#271052;stroke:#8957e5}
+      .win{fill:#3b2300;stroke:#9e6a03}
+      .ui{fill:#033a16;stroke:#2ea043}
+      .ext{fill:#0d1117;stroke:#6e7681}
+      .t,.g{fill:#e6edf3}
+      .h,.s,.lbl{fill:#8b949e}
+      .edge{stroke:#6e7681}
+      .cmd{stroke:#db6d28}
+      .head{fill:#6e7681}
+      .head-c{fill:#db6d28}
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="head" d="M0 0 8 4 0 8z"/>
+    </marker>
+    <marker id="arrow-c" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path class="head-c" d="M0 0 8 4 0 8z"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1520" height="924" rx="12"/>
+
+  <text class="g" x="24" y="36" style="font-size:16px">GPUi Shell · architecture</text>
+  <text class="s" x="232" y="36">one process · cargo workspace · crates/*</text>
+
+  <!-- legend -->
+  <rect class="sys" x="852" y="26" width="12" height="12" rx="3"/><text class="lbl" x="870" y="36">outside</text>
+  <rect class="svc" x="926" y="26" width="12" height="12" rx="3"/><text class="lbl" x="944" y="36">service</text>
+  <rect class="app" x="1000" y="26" width="12" height="12" rx="3"/><text class="lbl" x="1018" y="36">app glue</text>
+  <rect class="win" x="1080" y="26" width="12" height="12" rx="3"/><text class="lbl" x="1098" y="36">window</text>
+  <rect class="ui" x="1152" y="26" width="12" height="12" rx="3"/><text class="lbl" x="1170" y="36">ui</text>
+  <path class="edge" d="M1200 32h28" marker-end="url(#arrow)"/><text class="lbl" x="1236" y="36">data / events</text>
+  <path class="cmd" d="M1320 32h28" marker-end="url(#arrow-c)"/><text class="lbl" x="1356" y="36">commands</text>
+
+  <!-- column headers -->
+  <text class="h" x="24" y="72">OUTSIDE THE PROCESS</text>
+  <text class="h" x="268" y="72">CRATES/SERVICES · TOKIO · NO GPUI</text>
+  <text class="h" x="660" y="72">CRATES/APP · GPUI · THE BINARY</text>
+  <text class="h" x="1164" y="72">CRATES/UI · CRATES/ASSETS</text>
+
+  <!-- ── outside the process ── -->
+  <rect class="sys" x="24" y="100" width="220" height="96" rx="8"/>
+  <text class="t" x="40" y="124">D-Bus</text>
+  <text class="s" x="40" y="146">NetworkManager · BlueZ</text>
+  <text class="s" x="40" y="164">UPower · MPRIS players</text>
+  <text class="s" x="40" y="182">tray items · notify senders</text>
+
+  <rect class="sys" x="24" y="212" width="220" height="64" rx="8"/>
+  <text class="t" x="40" y="236">Compositor IPC</text>
+  <text class="s" x="40" y="258">Hyprland · Niri · Mango</text>
+
+  <rect class="sys" x="24" y="292" width="220" height="80" rx="8"/>
+  <text class="t" x="40" y="316">Audio &amp; hardware</text>
+  <text class="s" x="40" y="338">PulseAudio · PipeWire</text>
+  <text class="s" x="40" y="356">udev backlight · /proc</text>
+
+  <rect class="sys" x="24" y="388" width="220" height="64" rx="8"/>
+  <text class="t" x="40" y="412">Desktop &amp; tools</text>
+  <text class="s" x="40" y="434">*.desktop · icons · awww</text>
+
+  <rect class="sys" x="24" y="484" width="220" height="96" rx="8"/>
+  <text class="t" x="40" y="508">~/.config/gpuishell/</text>
+  <text class="s" x="40" y="530" xml:space="preserve">config.toml  you write</text>
+  <text class="s" x="40" y="548" xml:space="preserve">state.toml   shell writes</text>
+  <text class="s" x="40" y="566" xml:space="preserve">theme.toml   both</text>
+
+  <rect class="sys" x="24" y="596" width="220" height="64" rx="8"/>
+  <text class="t" x="40" y="620">gpuishell --input ";s"</text>
+  <text class="s" x="40" y="642">a second invocation</text>
+
+  <!-- outside ⇄ services -->
+  <path class="edge" d="M244 148H284" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <path class="edge" d="M244 244H284" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <path class="edge" d="M244 332H284" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+  <path class="edge" d="M244 420H284" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+
+  <!-- outside → app, under the services frame -->
+  <path class="edge" d="M244 532H676" marker-end="url(#arrow)"/>
+  <text class="lbl" x="444" y="526" text-anchor="middle">inotify · hot reload</text>
+  <path class="edge" d="M244 628H676" marker-end="url(#arrow)"/>
+  <text class="lbl" x="444" y="622" text-anchor="middle">unix socket</text>
+
+  <!-- ── crates/services ── -->
+  <rect class="frame" x="268" y="84" width="352" height="392" rx="10"/>
+
+  <rect class="svc" x="284" y="100" width="320" height="96" rx="8"/>
+  <text class="t" x="300" y="124">network · bluetooth · upower · mpris</text>
+  <text class="s" x="300" y="146">tray (StatusNotifierWatcher)</text>
+  <text class="s" x="300" y="164">notification (the daemon itself)</text>
+  <text class="s" x="300" y="182">bus.rs: one shared conn per bus</text>
+
+  <rect class="svc" x="284" y="212" width="320" height="64" rx="8"/>
+  <text class="t" x="300" y="236">compositor</text>
+  <text class="s" x="300" y="258">backend detected at startup</text>
+
+  <rect class="svc" x="284" y="292" width="320" height="80" rx="8"/>
+  <text class="t" x="300" y="316">audio · privacy · brightness · sysinfo</text>
+  <text class="s" x="300" y="338">libpulse · pipewire · udev</text>
+  <text class="s" x="300" y="356">sysinfo polls /proc</text>
+
+  <rect class="svc" x="284" y="388" width="320" height="64" rx="8"/>
+  <text class="t" x="300" y="412">applications · wallpaper</text>
+  <text class="s" x="300" y="434">desktop entries · awww</text>
+
+  <!-- services → app -->
+  <path class="edge" d="M620 148H676" marker-end="url(#arrow)"/>
+  <text class="lbl" x="648" y="140" text-anchor="middle">signals</text>
+  <path class="cmd" d="M882 466H624" marker-end="url(#arrow-c)"/>
+  <text class="lbl" x="774" y="460" text-anchor="middle">dispatch(Command)</text>
+
+  <!-- ── crates/app ── -->
+  <rect class="frame" x="660" y="84" width="472" height="592" rx="10"/>
+
+  <rect class="app" x="676" y="100" width="196" height="96" rx="8"/>
+  <text class="t" x="692" y="124">AppState</text>
+  <text class="s" x="692" y="146">global: all services</text>
+  <text class="s" x="692" y="164">lazy start on access</text>
+  <text class="s" x="692" y="182">display ↔ monitor</text>
+  <path class="edge" d="M774 196V212" marker-end="url(#arrow)"/>
+
+  <rect class="app" x="676" y="212" width="196" height="80" rx="8"/>
+  <text class="t" x="692" y="236">state::watch()</text>
+  <text class="s" x="692" y="258">signal → field</text>
+  <text class="s" x="692" y="276">→ cx.notify()</text>
+
+  <rect class="app" x="676" y="308" width="196" height="64" rx="8"/>
+  <text class="t" x="692" y="332">panel.rs</text>
+  <text class="s" x="692" y="354">one panel at a time</text>
+
+  <rect class="app" x="676" y="388" width="196" height="56" rx="8"/>
+  <text class="t" x="692" y="410">keybinds.rs</text>
+  <text class="s" x="692" y="430">key context per surface</text>
+
+  <rect class="app" x="676" y="484" width="196" height="80" rx="8"/>
+  <text class="t" x="692" y="508">Config · Theme</text>
+  <text class="s" x="692" y="530">keeps last good value</text>
+  <text class="s" x="692" y="548">--validate · notifies</text>
+
+  <rect class="app" x="676" y="580" width="196" height="80" rx="8"/>
+  <text class="t" x="692" y="604">ipc/</text>
+  <text class="s" x="692" y="626">gpuishell.sock</text>
+  <text class="s" x="692" y="644">→ toggle launcher</text>
+
+  <!-- signal bus into every window -->
+  <path class="edge" d="M872 252H882"/>
+  <path class="edge" d="M882 132V528"/>
+  <path class="edge" d="M882 132H892" marker-end="url(#arrow)"/>
+  <path class="edge" d="M882 208H892" marker-end="url(#arrow)"/>
+  <path class="edge" d="M882 292H892" marker-end="url(#arrow)"/>
+  <path class="edge" d="M882 376H892" marker-end="url(#arrow)"/>
+  <path class="edge" d="M882 452H892" marker-end="url(#arrow)"/>
+  <path class="edge" d="M882 528H892" marker-end="url(#arrow)"/>
+
+  <rect class="win" x="892" y="100" width="224" height="64" rx="8"/>
+  <text class="t" x="908" y="124">Bar</text>
+  <text class="s" x="908" y="146">per display · Top layer</text>
+
+  <rect class="win" x="892" y="176" width="224" height="64" rx="8"/>
+  <text class="t" x="908" y="200">Dock</text>
+  <text class="s" x="908" y="222">per display · Top layer</text>
+
+  <rect class="win" x="892" y="252" width="224" height="80" rx="8"/>
+  <text class="t" x="908" y="276">Panels · Overlay</text>
+  <text class="s" x="908" y="298">control center · tray</text>
+  <text class="s" x="908" y="316">media · sysinfo · notifs</text>
+
+  <rect class="win" x="892" y="344" width="224" height="64" rx="8"/>
+  <text class="t" x="908" y="368">Launcher</text>
+  <text class="s" x="908" y="390">singleton · Overlay</text>
+
+  <rect class="win" x="892" y="420" width="224" height="64" rx="8"/>
+  <text class="t" x="908" y="444">OSD</text>
+  <text class="s" x="908" y="466">volume · brightness</text>
+
+  <rect class="win" x="892" y="496" width="224" height="64" rx="8"/>
+  <text class="t" x="908" y="520">Notification popups</text>
+  <text class="s" x="908" y="542">Overlay</text>
+
+  <!-- windows → ui -->
+  <path class="edge" d="M1116 244H1180" marker-end="url(#arrow)"/>
+  <text class="lbl" x="1148" y="236" text-anchor="middle">render</text>
+
+  <!-- ── crates/ui · crates/assets ── -->
+  <rect class="frame" x="1164" y="84" width="332" height="592" rx="10"/>
+
+  <rect class="ui" x="1180" y="100" width="300" height="96" rx="8"/>
+  <text class="t" x="1196" y="124">ui::components</text>
+  <text class="s" x="1196" y="146">Button · List · Slider · ...</text>
+  <text class="s" x="1196" y="164">re-exported by use ui::*</text>
+  <text class="s" x="1196" y="182">presentation only, no IO</text>
+
+  <rect class="ui" x="1180" y="212" width="300" height="80" rx="8"/>
+  <text class="t" x="1196" y="236">ui::patterns</text>
+  <text class="s" x="1196" y="258">BarChip · LauncherFrame</text>
+  <text class="s" x="1196" y="276">PanelSurface · OsdIndicator</text>
+
+  <rect class="ui" x="1180" y="308" width="300" height="64" rx="8"/>
+  <text class="t" x="1196" y="332">ui::theme</text>
+  <text class="s" x="1196" y="354">Theme global · cx.theme()</text>
+
+  <rect class="ui" x="1180" y="388" width="300" height="64" rx="8"/>
+  <text class="t" x="1196" y="412">crates/assets</text>
+  <text class="s" x="1196" y="434">embedded Lucide SVG icons</text>
+
+  <rect class="ext" x="1180" y="484" width="300" height="80" rx="8"/>
+  <text class="t" x="1196" y="508">crates/story</text>
+  <text class="s" x="1196" y="530">cargo run -p story</text>
+  <text class="s" x="1196" y="548">dev gallery · not shipped</text>
+
+  <!-- ── inside every service ── -->
+  <rect class="frame" x="24" y="708" width="1472" height="192" rx="10"/>
+  <text class="g" x="40" y="734">Inside every service</text>
+  <text class="s" x="214" y="734">services/src/lifecycle.rs · ManagedService</text>
+
+  <rect class="sys" x="40" y="752" width="220" height="68" rx="8"/>
+  <text class="t" x="56" y="776">event source</text>
+  <text class="s" x="56" y="798">bus signal · IPC · poll</text>
+
+  <path class="edge" d="M260 786H316" marker-end="url(#arrow)"/>
+
+  <rect class="svc" x="316" y="752" width="276" height="68" rx="8"/>
+  <text class="t" x="332" y="776">listener loop (tokio)</text>
+  <text class="s" x="332" y="798">exits once !token.alive()</text>
+
+  <path class="edge" d="M592 786H648" marker-end="url(#arrow)"/>
+  <text class="lbl" x="620" y="778" text-anchor="middle">lock_mut</text>
+
+  <rect class="svc" x="648" y="752" width="220" height="68" rx="8"/>
+  <text class="t" x="664" y="776">Mutable&lt;Data&gt;</text>
+  <text class="s" x="664" y="798">subscribe() · get()</text>
+
+  <path class="edge" d="M868 786H948" marker-end="url(#arrow)"/>
+  <text class="lbl" x="908" y="778" text-anchor="middle">watch</text>
+
+  <rect class="win" x="948" y="752" width="220" height="68" rx="8"/>
+  <text class="t" x="964" y="776">widget re-renders</text>
+  <text class="s" x="964" y="798">cx.notify()</text>
+
+  <path class="cmd" d="M1168 786H1224" marker-end="url(#arrow-c)"/>
+  <text class="lbl" x="1196" y="778" text-anchor="middle">click</text>
+
+  <rect class="svc" x="1224" y="752" width="256" height="68" rx="8"/>
+  <text class="t" x="1240" y="776">dispatch(Command)</text>
+  <text class="s" x="1240" y="798">result comes back as data</text>
+
+  <path class="cmd" d="M1352 820V846H150V824" marker-end="url(#arrow-c)"/>
+
+  <text class="s" x="40" y="878">start() takes a fresh RunToken · stop()/restart bump the generation, the old listener bows out · mode per service: eager | lazy | off ([services], ;s view)</text>
+</svg>

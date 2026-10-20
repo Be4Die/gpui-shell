@@ -36,6 +36,31 @@ export default defineConfig({
             { label: 'Theme', slug: 'reference/theme' },
           ],
         },
+        {
+          label: 'Developers',
+          items: [
+            { label: 'Development Setup', slug: 'developer/setup' },
+            { label: 'Architecture', slug: 'developer/architecture' },
+            {
+              // Temporary: the module APIs are being stabilized for 1.0.
+              label: 'Extending (unstable)',
+              items: [
+                { label: 'Adding a bar module', slug: 'developer/unstable/bar-module' },
+                { label: 'Adding a launcher view', slug: 'developer/unstable/launcher-view' },
+              ],
+            },
+            {
+              label: 'Contributing',
+              link: 'https://github.com/andre-brandao/gpui-shell/blob/main/CONTRIBUTING.md',
+              attrs: { target: '_blank' },
+            },
+            {
+              label: 'Roadmap',
+              link: 'https://github.com/andre-brandao/gpui-shell/blob/main/ROADMAP.md',
+              attrs: { target: '_blank' },
+            },
+          ],
+        },
       ],
     }),
   ],
