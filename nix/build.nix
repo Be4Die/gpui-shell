@@ -118,13 +118,6 @@ let
 
       doCheck = false;
 
-      # Wallpaper theming shells out to matugen; the installed shell runs
-      # outside the dev shell, so put it on PATH.
-      postInstall = ''
-        wrapProgram $out/bin/${pname} \
-          --prefix PATH : ${lib.makeBinPath [ matugen ]}
-      '';
-
       cargoVendorDir = craneLib.vendorCargoDeps {
         inherit src cargoLock;
 
@@ -154,6 +147,14 @@ in
 craneLib.buildPackage (
   lib.recursiveUpdate commonArgs {
     inherit cargoArtifacts;
+
+    # Wallpaper theming shells out to matugen; the installed shell runs
+    # outside the dev shell, so put it on PATH. Not in commonArgs: the
+    # deps-only build has no binary to wrap.
+    postInstall = ''
+      wrapProgram $out/bin/${pname} \
+        --prefix PATH : ${lib.makeBinPath [ matugen ]}
+    '';
 
     meta = {
       mainProgram = pname;
