@@ -8,8 +8,9 @@ mod types;
 
 pub use types::*;
 
+use anyhow::Context as _;
 use dbus::BluetoothDbus;
-use futures_signals::signal::{Mutable, MutableSignalCloned, Signal};
+use futures_signals::signal::Mutable;
 use futures_util::StreamExt;
 use futures_util::stream::{BoxStream, select_all};
 use inotify::{Inotify, WatchMask};
@@ -19,7 +20,6 @@ use std::time::Duration;
 use tokio::task::AbortHandle;
 use tracing::{debug, error, warn};
 
-use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 
 /// Event-driven Bluetooth subscriber.
@@ -28,12 +28,18 @@ use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 /// and provides reactive state updates through `futures_signals`.
 #[derive(Debug, Clone, Default)]
 pub struct BluetoothSubscriber {
-    data: Mutable<BluetoothData>,
-    lifecycle: Lifecycle,
-    jobs: JobQueue<BluetoothCommand>,
+    core: crate::ServiceCore<BluetoothData, BluetoothCommand>,
     /// Stops a discovery after 15s. Replaced by every discovery command, so
     /// a timer from an earlier scan cannot cut a newer one short.
     discovery_timer: Arc<Mutex<Option<AbortHandle>>>,
+}
+
+impl std::ops::Deref for BluetoothSubscriber {
+    type Target = crate::ServiceCore<BluetoothData, BluetoothCommand>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl BluetoothSubscriber {
@@ -41,30 +47,6 @@ impl BluetoothSubscriber {
     /// [`ManagedService::start`].
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Get a signal that emits when Bluetooth state changes.
-    pub fn subscribe(&self) -> MutableSignalCloned<BluetoothData> {
-        self.data.signal_cloned()
-    }
-
-    /// Get the current Bluetooth data snapshot.
-    pub fn get(&self) -> BluetoothData {
-        self.data.get_cloned()
-    }
-
-    /// Commands queued or running, for per-device progress in the UI.
-    pub fn pending(&self) -> Vec<BluetoothCommand> {
-        self.jobs.in_flight()
-    }
-
-    pub fn pending_signal(&self) -> impl Signal<Item = Vec<BluetoothCommand>> + Unpin + use<> {
-        self.jobs.in_flight_signal()
-    }
-
-    /// Queue a Bluetooth command. Failures are logged.
-    pub fn dispatch(&self, command: BluetoothCommand) {
-        self.jobs.send(command);
     }
 
     async fn execute(&self, command: BluetoothCommand, token: &RunToken) -> anyhow::Result<()> {
@@ -216,38 +198,21 @@ impl ManagedService for BluetoothSubscriber {
             async move { subscriber.execute(command, &token).await }
         });
 
-        tokio::spawn(async move {
-            token.run_until_cancelled(run(data, &token)).await;
-        });
+        token.supervise(self.name(), move |token| run(data.clone(), token));
     }
 }
 
 /// One run: snapshot, then follow BlueZ until every stream ends.
-async fn run(data: Mutable<BluetoothData>, token: &RunToken) {
-    let conn = match crate::bus::system().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("Failed to connect to the system bus: {}", e);
-            token.error(e.to_string());
-            return;
-        }
-    };
-
-    match fetch_bluetooth_data(&conn).await {
-        Ok(fetched) => {
-            data.set(fetched);
-            token.active();
-        }
-        Err(e) => {
-            error!("Failed to fetch initial bluetooth data: {}", e);
-            token.error(e.to_string());
-        }
-    }
-
-    if let Err(e) = run_listener(data, conn).await {
-        error!("Bluetooth listener error: {}", e);
-        token.error(e.to_string());
-    }
+async fn run(data: Mutable<BluetoothData>, token: RunToken) -> anyhow::Result<()> {
+    let conn = crate::bus::system()
+        .await
+        .context("connecting to the system bus")?;
+    let fetched = fetch_bluetooth_data(&conn)
+        .await
+        .context("fetching initial Bluetooth state")?;
+    data.set_neq(fetched);
+    token.active();
+    run_listener(data, conn).await
 }
 
 /// Run the Bluetooth service listener.
@@ -297,11 +262,11 @@ async fn run_listener(data: Mutable<BluetoothData>, conn: zbus::Connection) -> a
     while let Some(change) = changes.next().await {
         debug!("Bluetooth {change}");
         if let Ok(new_data) = fetch_bluetooth_data(&conn).await {
-            data.set(new_data);
+            data.set_neq(new_data);
         }
     }
 
-    Ok(())
+    anyhow::bail!("Bluetooth event streams ended")
 }
 
 /// rfkill soft-block changes, watched with inotify on the tokio reactor so

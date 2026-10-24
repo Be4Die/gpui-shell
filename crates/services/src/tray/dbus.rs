@@ -303,7 +303,7 @@ pub trait StatusNotifierItem {
 }
 
 /// Menu layout from DBusMenu.
-#[derive(Clone, Debug, Type)]
+#[derive(Clone, Debug, PartialEq, Type)]
 #[zvariant(signature = "(ia{sv}av)")]
 pub struct MenuLayout(pub i32, pub MenuLayoutProps, pub Vec<MenuLayout>);
 
@@ -318,7 +318,7 @@ impl<'a> serde::Deserialize<'a> for MenuLayout {
 }
 
 /// Menu layout properties.
-#[derive(Clone, Debug, Default, Type, zvariant::DeserializeDict)]
+#[derive(Clone, Debug, Default, PartialEq, Type, zvariant::DeserializeDict)]
 #[zvariant(signature = "dict")]
 pub struct MenuLayoutProps {
     #[zvariant(rename = "children-display")]

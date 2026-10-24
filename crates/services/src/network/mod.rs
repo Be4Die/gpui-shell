@@ -11,16 +11,16 @@ pub use types::*;
 
 use std::time::Duration;
 
-use futures_signals::signal::{Mutable, MutableSignalCloned, Signal};
+use anyhow::Context as _;
+use futures_signals::signal::Mutable;
 use futures_util::StreamExt;
 use futures_util::stream::select_all;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use zbus::Connection;
 
 use self::dbus::access_point::AccessPointProxy;
 use self::dbus::statistics::StatisticsProxy;
 use self::nm::NetworkManager;
-use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 
 /// How long a requested scan may take before the UI stops showing it.
@@ -32,9 +32,15 @@ const SCAN_TIMEOUT: Duration = Duration::from_secs(20);
 /// and provides reactive state updates through `futures_signals`.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkSubscriber {
-    data: Mutable<NetworkData>,
-    lifecycle: Lifecycle,
-    jobs: JobQueue<NetworkCommand>,
+    core: crate::ServiceCore<NetworkData, NetworkCommand>,
+}
+
+impl std::ops::Deref for NetworkSubscriber {
+    type Target = crate::ServiceCore<NetworkData, NetworkCommand>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl NetworkSubscriber {
@@ -42,38 +48,6 @@ impl NetworkSubscriber {
     /// [`ManagedService::start`].
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Get a signal that emits when network state changes.
-    pub fn subscribe(&self) -> MutableSignalCloned<NetworkData> {
-        self.data.signal_cloned()
-    }
-
-    /// Get the current network data snapshot.
-    pub fn get(&self) -> NetworkData {
-        self.data.get_cloned()
-    }
-
-    /// Queue a network command. Failures are logged.
-    pub fn dispatch(&self, command: NetworkCommand) {
-        self.jobs.send(command);
-    }
-
-    /// Queue a network command and wait for its outcome.
-    pub fn request(
-        &self,
-        command: NetworkCommand,
-    ) -> impl Future<Output = anyhow::Result<()>> + use<> {
-        self.jobs.request(command)
-    }
-
-    /// Commands queued or running, for progress in the UI.
-    pub fn pending(&self) -> Vec<NetworkCommand> {
-        self.jobs.in_flight()
-    }
-
-    pub fn pending_signal(&self) -> impl Signal<Item = Vec<NetworkCommand>> + Unpin + use<> {
-        self.jobs.in_flight_signal()
     }
 
     async fn execute(&self, command: NetworkCommand, token: &RunToken) -> anyhow::Result<()> {
@@ -169,38 +143,32 @@ impl ManagedService for NetworkSubscriber {
             async move { subscriber.execute(command, &token).await }
         });
 
-        tokio::spawn(async move {
-            token.run_until_cancelled(run(data, &token)).await;
-        });
+        token.supervise(self.name(), move |token| run(data.clone(), token));
     }
 }
 
 /// One run: snapshot, then follow NetworkManager until the stream ends.
-async fn run(data: Mutable<NetworkData>, token: &RunToken) {
-    let conn = match crate::bus::system().await {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("Failed to connect to the system bus: {}", e);
-            token.error(e.to_string());
-            return;
-        }
-    };
+async fn run(data: Mutable<NetworkData>, token: RunToken) -> anyhow::Result<()> {
+    let conn = crate::bus::system()
+        .await
+        .context("connecting to the system bus")?;
+    let fetched = fetch_network_data(&conn)
+        .await
+        .context("fetching initial network state")?;
+    data.set_neq(fetched);
+    token.active();
 
-    match fetch_network_data(&conn).await {
-        Ok(fetched) => {
-            data.set(fetched);
-            token.active();
-        }
-        Err(e) => {
-            error!("Failed to fetch initial network data: {}", e);
-            token.error(e.to_string());
+    loop {
+        match run_listener(data.clone(), conn.clone()).await? {
+            ListenerOutcome::TopologyChanged => {
+                debug!("Network topology changed, rebuilding access point streams");
+            }
         }
     }
+}
 
-    if let Err(e) = run_listener(data, conn).await {
-        error!("Network listener error: {}", e);
-        token.error(e.to_string());
-    }
+enum ListenerOutcome {
+    TopologyChanged,
 }
 
 /// Fetch current network data from NetworkManager.
@@ -227,7 +195,10 @@ async fn fetch_network_data(conn: &Connection) -> anyhow::Result<NetworkData> {
 ///
 /// Runs under [`RunToken::run_until_cancelled`], so a stop drops it - and
 /// every pending write in its streams - at the next await.
-async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::Result<()> {
+async fn run_listener(
+    data: Mutable<NetworkData>,
+    conn: Connection,
+) -> anyhow::Result<ListenerOutcome> {
     info!("Network subscriber started");
 
     let nm = NetworkManager::new(&conn).await?;
@@ -244,6 +215,7 @@ async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::R
                     data.lock_mut().wifi_enabled = value;
                     debug!("WiFi enabled changed: {}", value);
                 }
+                false
             }
         })
         .boxed();
@@ -260,6 +232,7 @@ async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::R
                     data.lock_mut().connectivity = value.into();
                     debug!("Connectivity changed: {:?}", value);
                 }
+                false
             }
         })
         .boxed();
@@ -284,6 +257,7 @@ async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::R
                         data.lock_mut().wireless_access_points = aps;
                     }
                 }
+                false
             }
         })
         .boxed();
@@ -309,14 +283,22 @@ async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::R
                         let data = data_scan.clone();
                         let conn = conn_scan.clone();
                         async move {
+                            let mut topology_changed = false;
                             if let Ok(nm) = NetworkManager::new(&conn).await
                                 && let Ok(aps) = nm.wireless_access_points().await
                             {
-                                let mut data = data.lock_mut();
-                                data.wireless_access_points = aps;
-                                data.scanning = false;
+                                let mut current = data.lock_mut();
+                                topology_changed = current.wireless_access_points.len()
+                                    != aps.len()
+                                    || current
+                                        .wireless_access_points
+                                        .iter()
+                                        .any(|old| !aps.iter().any(|new| new.path == old.path));
+                                current.wireless_access_points = aps;
+                                current.scanning = false;
                                 debug!("Access points refreshed after scan");
                             }
+                            topology_changed
                         }
                     })
                     .boxed(),
@@ -366,6 +348,7 @@ async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::R
                                     *strength = value;
                                 }
                             }
+                            false
                         }
                     })
                     .boxed(),
@@ -410,6 +393,7 @@ async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::R
                                     }
                                 }
                             }
+                            false
                         }
                     })
                     .boxed(),
@@ -437,6 +421,7 @@ async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::R
                                     }
                                 }
                             }
+                            false
                         }
                     })
                     .boxed(),
@@ -463,8 +448,11 @@ async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::R
         events.push(stream);
     }
 
-    // Process events
-    while events.next().await.is_some() {}
+    while let Some(topology_changed) = events.next().await {
+        if topology_changed {
+            return Ok(ListenerOutcome::TopologyChanged);
+        }
+    }
 
-    Ok(())
+    anyhow::bail!("network event streams ended")
 }

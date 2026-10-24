@@ -57,7 +57,7 @@ impl Workspaces {
     /// with (`crate::state::display_id_for_window`), and compare its uuid
     /// against the same hash computed from each compositor monitor's name.
     fn current_monitor_name(&self, window: &Window, cx: &gpui::App) -> Option<String> {
-        let display_id = crate::state::display_id_for_window(window)?;
+        let display_id = crate::state::display_id_for_window(window, cx)?;
         crate::state::monitor_for_display(Some(display_id), &self.state, cx).map(|m| m.name.clone())
     }
 

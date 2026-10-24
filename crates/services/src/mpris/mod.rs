@@ -7,7 +7,7 @@ use std::fmt::Display;
 
 use anyhow::Context;
 use dbus::MprisPlayerProxy;
-use futures_signals::signal::{Mutable, MutableSignalCloned};
+use futures_signals::signal::Mutable;
 use futures_util::StreamExt;
 use futures_util::future::join_all;
 use futures_util::stream::select_all;
@@ -147,22 +147,28 @@ pub enum PlayerCommand {
 /// Reactive MPRIS subscriber.
 #[derive(Debug, Clone)]
 pub struct MprisSubscriber {
-    data: Mutable<MprisData>,
-    lifecycle: Lifecycle,
-    jobs: JobQueue<MprisCommand>,
+    core: crate::ServiceCore<MprisData, MprisCommand>,
+}
+
+impl std::ops::Deref for MprisSubscriber {
+    type Target = crate::ServiceCore<MprisData, MprisCommand>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl Default for MprisSubscriber {
     fn default() -> Self {
         Self {
-            data: Mutable::default(),
-            lifecycle: Lifecycle::default(),
-            // A volume drag only needs its last value per player.
-            jobs: JobQueue::new("MPRIS").coalesce(|older, newer| {
-                older.service_name == newer.service_name
-                    && matches!(older.command, PlayerCommand::Volume(_))
-                    && matches!(newer.command, PlayerCommand::Volume(_))
-            }),
+            core: crate::ServiceCore::with_jobs(
+                // A volume drag only needs its last value per player.
+                JobQueue::new("MPRIS").coalesce(|older, newer| {
+                    older.service_name == newer.service_name
+                        && matches!(older.command, PlayerCommand::Volume(_))
+                        && matches!(newer.command, PlayerCommand::Volume(_))
+                }),
+            ),
         }
     }
 }
@@ -172,21 +178,6 @@ impl MprisSubscriber {
     /// [`ManagedService::start`].
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Get a signal that emits when MPRIS state changes.
-    pub fn subscribe(&self) -> MutableSignalCloned<MprisData> {
-        self.data.signal_cloned()
-    }
-
-    /// Get the current MPRIS state snapshot.
-    pub fn get(&self) -> MprisData {
-        self.data.get_cloned()
-    }
-
-    /// Queue a command for a specific player. Failures are logged.
-    pub fn dispatch(&self, command: MprisCommand) {
-        self.jobs.send(command);
     }
 
     /// The listener picks up the resulting property changes, so there is
@@ -333,9 +324,7 @@ async fn run_listener(
             .context("fetching MPRIS players")?;
         token.active();
 
-        if data.get_cloned() != current {
-            *data.lock_mut() = current.clone();
-        }
+        data.set_neq(current.clone());
 
         let dbus = DBusProxy::new(&conn).await?;
         let mut streams = vec![

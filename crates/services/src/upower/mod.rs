@@ -9,13 +9,12 @@ pub mod dbus;
 use std::time::Duration;
 
 use anyhow::Result;
-use futures_signals::signal::{Mutable, MutableSignalCloned};
+use futures_signals::signal::Mutable;
 use futures_util::StreamExt;
 use futures_util::stream::select_all;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use zbus::Connection;
 
-use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 pub use dbus::{BatteryLevel, BatteryState, DeviceType, WarningLevel};
 use dbus::{DeviceProxy, PowerProfilesProxy, UPowerService};
@@ -74,7 +73,7 @@ impl PowerProfile {
 }
 
 /// Battery data from UPower.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct BatteryData {
     /// Charge percentage (0-100).
     pub percentage: u8,
@@ -157,7 +156,7 @@ pub struct ChargeLimit {
 }
 
 /// Complete UPower service data.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct UPowerData {
     /// Battery data (None if no battery present).
     pub battery: Option<BatteryData>,
@@ -324,9 +323,15 @@ async fn charge_limit_device(conn: &Connection) -> Option<DeviceProxy<'static>> 
 /// providing reactive state updates through `futures_signals`.
 #[derive(Debug, Clone, Default)]
 pub struct UPowerSubscriber {
-    data: Mutable<UPowerData>,
-    lifecycle: Lifecycle,
-    jobs: JobQueue<UPowerCommand>,
+    core: crate::ServiceCore<UPowerData, UPowerCommand>,
+}
+
+impl std::ops::Deref for UPowerSubscriber {
+    type Target = crate::ServiceCore<UPowerData, UPowerCommand>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl UPowerSubscriber {
@@ -334,21 +339,6 @@ impl UPowerSubscriber {
     /// [`ManagedService::start`].
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Get a signal that emits when data changes.
-    pub fn subscribe(&self) -> MutableSignalCloned<UPowerData> {
-        self.data.signal_cloned()
-    }
-
-    /// Get the current data snapshot.
-    pub fn get(&self) -> UPowerData {
-        self.data.get_cloned()
-    }
-
-    /// Queue a command. Failures are logged.
-    pub fn dispatch(&self, command: UPowerCommand) {
-        self.jobs.send(command);
     }
 
     async fn execute(&self, command: UPowerCommand) -> Result<()> {
@@ -399,7 +389,7 @@ impl UPowerSubscriber {
     async fn refresh(&self) -> Result<()> {
         let conn = crate::bus::system().await?;
         let new_data = UPowerData::init(&conn).await?;
-        self.data.set(new_data);
+        self.data.set_neq(new_data);
         debug!("Refreshed UPower data");
         Ok(())
     }
@@ -603,37 +593,15 @@ impl UPowerSubscriber {
         // Process events; the handlers write as they go.
         while events.next().await.is_some() {}
 
-        warn!("UPower event stream ended unexpectedly");
-        Ok(())
+        anyhow::bail!("UPower event streams ended")
     }
 
     /// Bring the subscriber up: fetch a snapshot, then monitor.
-    async fn run_from_scratch(&self, token: &RunToken) {
-        let conn = match crate::bus::system().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                error!("Failed to connect to the system bus: {}", e);
-                token.error(e.to_string());
-                return;
-            }
-        };
-
-        match UPowerData::init(&conn).await {
-            Ok(data) => {
-                self.data.set(data);
-                token.active();
-            }
-            Err(e) => {
-                error!("Failed to initialize UPower data: {}", e);
-                token.error(e.to_string());
-                return;
-            }
-        }
-
-        if let Err(e) = self.run().await {
-            error!("UPower subscriber error: {}", e);
-            token.error(e.to_string());
-        }
+    async fn run_from_scratch(&self, token: RunToken) -> Result<()> {
+        let conn = crate::bus::system().await?;
+        self.data.set_neq(UPowerData::init(&conn).await?);
+        token.active();
+        self.run().await
     }
 
     /// Helper to update a single battery field.
@@ -672,10 +640,9 @@ impl ManagedService for UPowerSubscriber {
         });
 
         let subscriber = self.clone();
-        tokio::spawn(async move {
-            token
-                .run_until_cancelled(subscriber.run_from_scratch(&token))
-                .await;
+        token.supervise(self.name(), move |token| {
+            let subscriber = subscriber.clone();
+            async move { subscriber.run_from_scratch(token).await }
         });
     }
 }

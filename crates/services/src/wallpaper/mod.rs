@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 
-use futures_signals::signal::{Mutable, MutableSignalCloned};
 use tracing::{debug, warn};
 
 use crate::jobs::JobQueue;
@@ -39,18 +38,24 @@ pub enum WallpaperCommand {
 /// Reactive wallpaper subscriber.
 #[derive(Debug, Clone)]
 pub struct WallpaperSubscriber {
-    data: Mutable<WallpaperData>,
-    lifecycle: Lifecycle,
-    jobs: JobQueue<WallpaperCommand>,
+    core: crate::ServiceCore<WallpaperData, WallpaperCommand>,
+}
+
+impl std::ops::Deref for WallpaperSubscriber {
+    type Target = crate::ServiceCore<WallpaperData, WallpaperCommand>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl Default for WallpaperSubscriber {
     fn default() -> Self {
         Self {
-            data: Mutable::default(),
-            lifecycle: Lifecycle::default(),
-            // Clicking through the picker only needs the last pick applied.
-            jobs: JobQueue::new("Wallpaper").coalesce(|_, _| true),
+            core: crate::ServiceCore::with_jobs(
+                // Clicking through the picker only needs the last pick applied.
+                JobQueue::new("Wallpaper").coalesce(|_, _| true),
+            ),
         }
     }
 }
@@ -60,21 +65,6 @@ impl WallpaperSubscriber {
     /// [`ManagedService::start`].
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Get a signal that emits when wallpaper state changes.
-    pub fn subscribe(&self) -> MutableSignalCloned<WallpaperData> {
-        self.data.signal_cloned()
-    }
-
-    /// Get the current wallpaper data snapshot.
-    pub fn get(&self) -> WallpaperData {
-        self.data.get_cloned()
-    }
-
-    /// Queue a wallpaper command. Failures are logged.
-    pub fn dispatch(&self, command: WallpaperCommand) {
-        self.jobs.send(command);
     }
 
     async fn execute(&self, command: WallpaperCommand) -> anyhow::Result<()> {

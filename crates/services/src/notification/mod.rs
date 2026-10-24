@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
-use futures_signals::signal::{Mutable, MutableSignalCloned};
+use futures_signals::signal::Mutable;
 use tracing::{debug, warn};
 use zbus::{
     Connection,
@@ -22,7 +22,6 @@ use zbus::{
 
 use crate::ServiceStatus;
 use crate::applications::icons::lookup_icon;
-use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService};
 
 const NAME: WellKnownName =
@@ -38,7 +37,7 @@ const MAX_NOTIFICATION_HISTORY: usize = 200;
 static REGISTRATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A single desktop notification.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Notification {
     pub id: u32,
     pub app_name: String,
@@ -76,7 +75,7 @@ impl Notification {
 }
 
 /// Notification center state.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NotificationData {
     pub notifications: Vec<Notification>,
     pub popup_ids: Vec<u32>,
@@ -130,11 +129,17 @@ pub enum NotificationCommand {
 /// Event-driven notification service.
 #[derive(Debug, Clone, Default)]
 pub struct NotificationSubscriber {
-    data: Mutable<NotificationData>,
-    lifecycle: Lifecycle,
-    jobs: JobQueue<NotificationCommand>,
+    core: crate::ServiceCore<NotificationData, NotificationCommand>,
     /// Expiry timers wait while set.
     popups_held: Arc<AtomicBool>,
+}
+
+impl std::ops::Deref for NotificationSubscriber {
+    type Target = crate::ServiceCore<NotificationData, NotificationCommand>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
 }
 
 impl NotificationSubscriber {
@@ -142,14 +147,6 @@ impl NotificationSubscriber {
     /// [`ManagedService::start`].
     pub fn new() -> Self {
         Self::default()
-    }
-
-    pub fn subscribe(&self) -> MutableSignalCloned<NotificationData> {
-        self.data.signal_cloned()
-    }
-
-    pub fn get(&self) -> NotificationData {
-        self.data.get_cloned()
     }
 
     pub fn latest_popup(&self) -> Option<Notification> {

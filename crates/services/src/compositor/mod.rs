@@ -115,7 +115,7 @@ impl CompositorSubscriber {
             CompositorBackend::Niri => niri::fetch_full_state()?,
             CompositorBackend::Mango => mango::fetch_full_state()?,
         };
-        self.data.set(new_state);
+        self.data.set_neq(new_state);
         Ok(())
     }
 }

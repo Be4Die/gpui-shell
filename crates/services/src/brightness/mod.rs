@@ -16,7 +16,7 @@ use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 
 /// Brightness data state.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BrightnessData {
     /// Current brightness value (raw).
     pub current: u32,
@@ -184,7 +184,7 @@ impl ManagedService for BrightnessSubscriber {
 
         let Some(device_path) = find_backlight_device() else {
             warn!("No backlight device found");
-            self.device.set(None);
+            self.device.set_neq(None);
             self.lifecycle.set_unavailable();
             return;
         };
@@ -195,7 +195,7 @@ impl ManagedService for BrightnessSubscriber {
                     "Brightness service initialized: {} (max: {})",
                     data.current, data.max
                 );
-                self.data.set(data);
+                self.data.set_neq(data);
             }
             Err(e) => {
                 error!("Failed to read brightness: {}", e);
@@ -204,7 +204,7 @@ impl ManagedService for BrightnessSubscriber {
             }
         }
 
-        self.device.set(Some(device_path.clone()));
+        self.device.set_neq(Some(device_path.clone()));
         token.active();
 
         let subscriber = self.clone();

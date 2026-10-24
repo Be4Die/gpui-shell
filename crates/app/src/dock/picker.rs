@@ -79,7 +79,6 @@ impl Render for DockAppPicker {
                     cx.listener(move |_this, _event, window, cx| {
                         toggle_pin(&id, cx);
                         window.remove_window();
-                        crate::windows::ShellWindows::forget_panel(cx, "dock-app-picker");
                     }),
                 )
                 .child(label)
@@ -89,9 +88,8 @@ impl Render for DockAppPicker {
             .id("dock-app-picker")
             .track_focus(&self.focus_handle)
             .key_context("Launcher")
-            .on_action(cx.listener(|_this, _: &Cancel, window, cx| {
+            .on_action(cx.listener(|_this, _: &Cancel, window, _cx| {
                 window.remove_window();
-                crate::windows::ShellWindows::forget_panel(cx, "dock-app-picker");
             }))
             .on_action(cx.listener(|this, _: &Backspace, _window, cx| {
                 this.input.backspace();

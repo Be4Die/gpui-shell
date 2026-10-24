@@ -11,7 +11,6 @@ use super::{
 };
 
 pub(super) struct DockContextMenu {
-    panel_id: String,
     item_key: String,
     is_pinned: bool,
     exec: Option<String>,
@@ -23,7 +22,6 @@ pub(super) struct DockContextMenu {
 
 impl DockContextMenu {
     pub(super) fn new(
-        panel_id: String,
         item_key: String,
         is_pinned: bool,
         exec: Option<String>,
@@ -32,7 +30,6 @@ impl DockContextMenu {
         _cx: &mut Context<Self>,
     ) -> Self {
         Self {
-            panel_id,
             item_key,
             is_pinned,
             exec,
@@ -76,12 +73,10 @@ impl Focusable for DockContextMenu {
 impl Render for DockContextMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.focus_out_subscription.is_none() {
-            let panel_id = self.panel_id.clone();
             self.focus_out_subscription =
                 Some(
-                    cx.on_focus_out(&self.focus_handle, window, move |_, _, window, cx| {
+                    cx.on_focus_out(&self.focus_handle, window, move |_, _, window, _cx| {
                         window.remove_window();
-                        crate::windows::ShellWindows::forget_panel(cx, &panel_id);
                     }),
                 );
         }

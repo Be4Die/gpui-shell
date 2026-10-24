@@ -348,9 +348,6 @@ impl<'a> NetworkManager<'a> {
                 .build()
                 .await?;
 
-            // Request a scan (ignore errors)
-            let _ = wireless_device.request_scan(HashMap::new()).await;
-
             let access_points = wireless_device.get_access_points().await?;
             let state = device_proxy
                 .cached_state()

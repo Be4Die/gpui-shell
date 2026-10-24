@@ -3,7 +3,7 @@
 mod card;
 mod config;
 mod panel;
-mod popup;
+pub(crate) mod popup;
 mod widget;
 
 pub use config::{NotificationConfig, NotificationPopupPosition};

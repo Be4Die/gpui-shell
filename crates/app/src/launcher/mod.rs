@@ -13,8 +13,8 @@ pub mod view;
 
 use gpui::{
     App, Bounds, Context, FocusHandle, Focusable, Point, ScrollHandle, Size, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions, div,
-    layer_shell::*, prelude::*, px,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, layer_shell::*,
+    prelude::*, px,
 };
 use modules::{HelpView, all_views};
 use ui::patterns::LauncherFrame;
@@ -418,8 +418,7 @@ impl Render for Launcher {
             .key_context("Launcher")
             .on_action(cx.listener(|this, _: &Cancel, window, cx| {
                 if this.input.is_empty() {
-                    // Clear the static handle before removing window
-                    *LAUNCHER_WINDOW.lock().unwrap() = None;
+                    crate::windows::ShellWindows::set_launcher(cx, None);
                     window.remove_window();
                 } else {
                     // First Esc clears input; second Esc closes.
@@ -431,8 +430,7 @@ impl Render for Launcher {
             }))
             .on_action(cx.listener(|this, _: &Confirm, window, cx| {
                 if this.handle_input(ViewInput::Enter, cx) {
-                    // Clear the static handle before removing window
-                    *LAUNCHER_WINDOW.lock().unwrap() = None;
+                    crate::windows::ShellWindows::set_launcher(cx, None);
                     window.remove_window();
                 }
                 cx.notify();
@@ -579,10 +577,6 @@ impl Render for Launcher {
     }
 }
 
-/// Global state to track the launcher window.
-static LAUNCHER_WINDOW: std::sync::Mutex<Option<WindowHandle<Launcher>>> =
-    std::sync::Mutex::new(None);
-
 pub fn init(_cx: &mut App) {}
 
 /// Toggle the launcher window with optional prefilled input.
@@ -595,10 +589,7 @@ pub fn toggle(input: Option<String>, cx: &mut App) {
     let start = std::time::Instant::now();
     tracing::debug!("launcher::toggle: start");
 
-    let mut guard = LAUNCHER_WINDOW.lock().unwrap();
-    tracing::debug!("launcher::toggle: acquired lock {:?}", start.elapsed());
-
-    if let Some(handle) = guard.take() {
+    if let Some(handle) = crate::windows::ShellWindows::take_launcher(cx) {
         // If input is provided, update existing launcher instead of closing
         if let Some(input_text) = input {
             let update_result = handle.update(cx, |launcher, _, cx| {
@@ -606,7 +597,7 @@ pub fn toggle(input: Option<String>, cx: &mut App) {
                 cx.notify();
             });
             if update_result.is_ok() {
-                *guard = Some(handle);
+                crate::windows::ShellWindows::set_launcher(cx, Some(handle));
                 return;
             }
         }
@@ -656,8 +647,7 @@ pub fn toggle(input: Option<String>, cx: &mut App) {
                 })
             },
         ) {
-            *guard = Some(handle);
-            crate::windows::ShellWindows::set_launcher(cx, Some(handle.into()));
+            crate::windows::ShellWindows::set_launcher(cx, Some(handle));
             tracing::debug!("launcher::toggle: window opened {:?}", start.elapsed());
         }
     }

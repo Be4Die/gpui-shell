@@ -115,7 +115,7 @@ pub struct AccessPoint {
 }
 
 /// Information about an active network connection.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActiveConnectionInfo {
     Wired {
         name: String,
@@ -146,7 +146,7 @@ impl ActiveConnectionInfo {
 }
 
 /// Network traffic statistics for a device.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkStatistics {
     pub(crate) prev_tx: u64,
     pub(crate) prev_rx: u64,
@@ -183,7 +183,7 @@ impl NetworkStatistics {
 }
 
 /// Network service data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetworkData {
     /// Whether WiFi is enabled.
     pub wifi_enabled: bool,

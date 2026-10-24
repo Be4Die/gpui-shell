@@ -26,7 +26,7 @@ pub enum Media {
 }
 
 /// An application node accessing media via PipeWire.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplicationNode {
     /// PipeWire node ID.
     pub id: u32,
@@ -35,7 +35,7 @@ pub struct ApplicationNode {
 }
 
 /// Privacy-related data.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrivacyData {
     /// Active PipeWire media stream nodes.
     pub nodes: Vec<ApplicationNode>,

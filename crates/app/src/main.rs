@@ -62,8 +62,8 @@ async fn main() {
         config::Config::init(cx);
         // Registers the TextField / Menu keybindings the component set needs.
         ui::init(cx);
-        state::AppState::init(services, cx);
         windows::ShellWindows::init(cx);
+        state::AppState::init(services, cx);
 
         // Register keybindings
         keybinds::register(cx);

@@ -2,9 +2,6 @@
 //! up to two peeking edges); hovered, it fans out, shows full cards and holds
 //! expiry. The window fits its content and only the cards take input.
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-
 use futures_signals::signal::SignalExt;
 use futures_util::StreamExt;
 use gpui::{
@@ -18,20 +15,17 @@ use ui::{ActiveTheme, Color, Icon, IconSize, Radius, Spacing};
 
 use crate::config::ActiveConfig;
 use crate::state::AppState;
-use crate::windows::WindowFit;
+use crate::windows::{ShellWindows, WindowFit};
 
 use super::card::{activate_notification, is_critical, notification_card_body};
 use super::config::{NotificationConfig, NotificationPopupPosition};
-
-static POPUP_STATE: LazyLock<Mutex<HashMap<Option<DisplayId>, PopupWindowState>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const PEEK_COUNT: usize = 2;
 const PEEK_HEIGHT: f32 = 6.0;
 /// Per side, per level of depth.
 const PEEK_INSET: f32 = 10.0;
 
-struct PopupWindowState {
+pub(crate) struct PopupWindowState {
     handle: AnyWindowHandle,
     view: Entity<NotificationPopupStack>,
 }
@@ -289,8 +283,7 @@ fn popup_targets(cx: &App) -> Vec<Option<DisplayId>> {
 }
 
 fn close_popups(subscriber: &NotificationSubscriber, cx: &mut App) {
-    let mut guard = POPUP_STATE.lock().unwrap();
-    for (_, state) in guard.drain() {
+    for (_, state) in ShellWindows::take_popups(cx) {
         let _ = cx.update_window(state.handle, |_, window, _cx| {
             window.remove_window();
         });
@@ -308,9 +301,9 @@ fn sync_popup(subscriber: &NotificationSubscriber, cx: &mut App) {
     }
 
     let targets = popup_targets(cx);
-    let mut guard = POPUP_STATE.lock().unwrap();
+    let mut popups = ShellWindows::take_popups(cx);
 
-    guard.retain(|display_id, state| {
+    popups.retain(|display_id, state| {
         if targets.contains(display_id) {
             true
         } else {
@@ -322,7 +315,7 @@ fn sync_popup(subscriber: &NotificationSubscriber, cx: &mut App) {
     });
 
     for display_id in targets {
-        if let Some(existing) = guard.get(&display_id) {
+        if let Some(existing) = popups.get(&display_id) {
             let view = existing.view.clone();
             let handle = existing.handle;
             let updated = cx
@@ -338,7 +331,7 @@ fn sync_popup(subscriber: &NotificationSubscriber, cx: &mut App) {
             }
         }
 
-        guard.remove(&display_id);
+        popups.remove(&display_id);
         let sub = subscriber.clone();
         let notifications = notifications.clone();
         if let Ok(handle) = cx
@@ -347,7 +340,7 @@ fn sync_popup(subscriber: &NotificationSubscriber, cx: &mut App) {
             })
         {
             let view = handle.update(cx, |_, _, cx| cx.entity().clone()).unwrap();
-            guard.insert(
+            popups.insert(
                 display_id,
                 PopupWindowState {
                     handle: handle.into(),
@@ -356,6 +349,7 @@ fn sync_popup(subscriber: &NotificationSubscriber, cx: &mut App) {
             );
         }
     }
+    ShellWindows::set_popups(cx, popups);
 }
 
 pub fn init(cx: &mut App) {

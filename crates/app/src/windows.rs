@@ -2,14 +2,17 @@
 //! the notification popups. [`ShellWindows`] tracks what is open; [`PanelHost`]
 //! sizes a [`PanelSize::FitHeight`] panel to its content before painting it.
 
+use std::collections::HashMap;
+
 use gpui::{
     AnyElement, AnyWindowHandle, App, AvailableSpace, Bounds, Context, DisplayId, Entity, Global,
-    Pixels, Point, Render, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, div, layer_shell::*, point, prelude::*, px, size,
+    Pixels, Point, Render, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
+    WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, size,
 };
 use ui::ActiveTheme;
 
 use crate::config::BarPosition;
+use crate::launcher::Launcher;
 
 // ============================================================================
 // Panel sizing and placement
@@ -338,7 +341,10 @@ struct OpenPanel {
 pub struct ShellWindows {
     /// Only one panel is open at a time.
     panel: Option<OpenPanel>,
-    launcher: Option<AnyWindowHandle>,
+    launcher: Option<WindowHandle<Launcher>>,
+    displays: HashMap<AnyWindowHandle, DisplayId>,
+    osd: Option<crate::osd::OsdWindowState>,
+    popups: HashMap<Option<DisplayId>, crate::notification::popup::PopupWindowState>,
 }
 
 impl Global for ShellWindows {}
@@ -363,12 +369,52 @@ impl ShellWindows {
             .is_some_and(|panel| Self::is_alive(cx, panel.handle))
             || this
                 .launcher
-                .is_some_and(|handle| Self::is_alive(cx, handle))
+                .is_some_and(|handle| Self::is_alive(cx, handle.into()))
     }
 
     /// Remember the launcher window. Liveness is checked on use.
-    pub fn set_launcher(cx: &mut App, handle: Option<AnyWindowHandle>) {
+    pub fn set_launcher(cx: &mut App, handle: Option<WindowHandle<Launcher>>) {
         cx.default_global::<Self>().launcher = handle;
+    }
+
+    pub fn take_launcher(cx: &mut App) -> Option<WindowHandle<Launcher>> {
+        cx.default_global::<Self>().launcher.take()
+    }
+
+    pub fn record_display(cx: &mut App, handle: AnyWindowHandle, display_id: Option<DisplayId>) {
+        if let Some(display_id) = display_id {
+            cx.default_global::<Self>()
+                .displays
+                .insert(handle, display_id);
+        }
+    }
+
+    pub fn display_for_window(cx: &App, window: &Window) -> Option<DisplayId> {
+        cx.try_global::<Self>()?
+            .displays
+            .get(&window.window_handle())
+            .copied()
+    }
+
+    pub(crate) fn osd(cx: &App) -> Option<crate::osd::OsdWindowState> {
+        cx.try_global::<Self>()?.osd.clone()
+    }
+
+    pub(crate) fn set_osd(cx: &mut App, state: Option<crate::osd::OsdWindowState>) {
+        cx.default_global::<Self>().osd = state;
+    }
+
+    pub(crate) fn take_popups(
+        cx: &mut App,
+    ) -> HashMap<Option<DisplayId>, crate::notification::popup::PopupWindowState> {
+        std::mem::take(&mut cx.default_global::<Self>().popups)
+    }
+
+    pub(crate) fn set_popups(
+        cx: &mut App,
+        popups: HashMap<Option<DisplayId>, crate::notification::popup::PopupWindowState>,
+    ) {
+        cx.default_global::<Self>().popups = popups;
     }
 
     /// The ID of the open panel, if any.
@@ -470,14 +516,6 @@ impl ShellWindows {
             let _ = cx.update_window(open.handle, |_, window, _cx| {
                 window.remove_window();
             });
-        }
-    }
-
-    /// Forget a panel that already closed itself through its window lifecycle.
-    pub fn forget_panel(cx: &mut App, panel_id: &str) {
-        let this = cx.default_global::<Self>();
-        if this.panel.as_ref().is_some_and(|open| open.id == panel_id) {
-            this.panel = None;
         }
     }
 }

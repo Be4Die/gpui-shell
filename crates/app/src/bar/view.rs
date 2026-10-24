@@ -144,7 +144,7 @@ pub fn init(cx: &mut App) {
 /// Open the bar with custom configuration.
 pub fn open_with_config(display_id: Option<DisplayId>, cx: &mut App) -> bool {
     match cx.open_window(window_options(display_id, cx), move |window, cx| {
-        crate::state::record_window_display(window.window_handle(), display_id);
+        crate::state::record_window_display(window.window_handle(), display_id, cx);
         cx.new(Bar::new)
     }) {
         Ok(_) => true,

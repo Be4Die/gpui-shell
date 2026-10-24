@@ -195,7 +195,7 @@ fn run_listener(data: Mutable<CompositorState>) -> Result<()> {
 
         // Map to our generic state and update the Mutable
         let state = map_state(&internal_state);
-        data.set(state);
+        data.set_neq(state);
     }
 
     info!("Niri event stream ended");
