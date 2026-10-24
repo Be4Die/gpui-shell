@@ -1131,9 +1131,7 @@ mod tests {
             title: "Test window".to_string(),
             monitor: monitor.to_string(),
             workspace_id: 1,
-            is_focused: false,
-            is_minimized: false,
-            geometry: None,
+            ..Default::default()
         }
     }
 

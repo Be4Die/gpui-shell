@@ -148,6 +148,14 @@ impl BatteryData {
     }
 }
 
+/// Battery charge limit, on hardware that supports one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChargeLimit {
+    pub enabled: bool,
+    /// Percentage charging stops at.
+    pub end_threshold: Option<u8>,
+}
+
 /// Complete UPower service data.
 #[derive(Debug, Clone, Default)]
 pub struct UPowerData {
@@ -157,10 +165,13 @@ pub struct UPowerData {
     pub power_profile: PowerProfile,
     /// Whether power profiles daemon is available.
     pub power_profiles_available: bool,
-    /// Whether currently running on battery power.
-    pub on_battery: bool,
+    /// Whether running on battery power; `None` when UPower can't tell.
+    /// Unlike the battery state, it doesn't flip when charging pauses.
+    pub on_battery: Option<bool>,
     /// Whether the lid is closed (if applicable).
     pub lid_closed: Option<bool>,
+    /// `None` when no battery supports a charge limit.
+    pub charge_limit: Option<ChargeLimit>,
 }
 
 impl UPowerData {
@@ -196,11 +207,16 @@ impl UPowerData {
         };
 
         // Get system power state
-        let on_battery = upower.on_battery().await.unwrap_or(false);
+        let on_battery = upower.on_battery().await.ok();
         let lid_closed = if upower.lid_is_present().await.unwrap_or(false) {
             Some(upower.lid_is_closed().await.unwrap_or(false))
         } else {
             None
+        };
+
+        let charge_limit = match charge_limit_device(conn).await {
+            Some(device) => Self::fetch_charge_limit(&device).await,
+            None => None,
         };
 
         Ok(Self {
@@ -209,6 +225,21 @@ impl UPowerData {
             power_profiles_available,
             on_battery,
             lid_closed,
+            charge_limit,
+        })
+    }
+
+    async fn fetch_charge_limit(device: &DeviceProxy<'_>) -> Option<ChargeLimit> {
+        let enabled = device.charge_threshold_enabled().await.ok()?;
+        let end_threshold = device
+            .charge_end_threshold()
+            .await
+            .ok()
+            .filter(|t| (1..=100).contains(t))
+            .map(|t| t as u8);
+        Some(ChargeLimit {
+            enabled,
+            end_threshold,
         })
     }
 
@@ -260,8 +291,31 @@ pub enum UPowerCommand {
     SetPowerProfile(PowerProfile),
     /// Cycle to the next power profile.
     CyclePowerProfile,
+    /// Turn the battery charge limit on or off.
+    SetChargeLimit(bool),
     /// Refresh battery data.
     Refresh,
+}
+
+/// The laptop battery that supports a charge limit, if any. The display
+/// device is a composite and never does.
+async fn charge_limit_device(conn: &Connection) -> Option<DeviceProxy<'static>> {
+    let upower = UPowerService::new(conn).await.ok()?;
+    for path in upower.enumerate_devices().await.ok()? {
+        let Ok(builder) = DeviceProxy::builder(conn).path(path) else {
+            continue;
+        };
+        let Ok(device) = builder.build().await else {
+            continue;
+        };
+        let is_system_battery = device.device_type().await.ok() == Some(DeviceType::Battery)
+            && device.power_supply().await.unwrap_or(false);
+        // Errors on UPower without charge threshold support.
+        if is_system_battery && device.charge_threshold_supported().await.unwrap_or(false) {
+            return Some(device);
+        }
+    }
+    None
 }
 
 /// Event-driven UPower subscriber.
@@ -312,6 +366,18 @@ impl UPowerSubscriber {
                     .await?;
                 self.set_power_profile(PowerProfile::from(current.as_str()).next())
                     .await?;
+            }
+            UPowerCommand::SetChargeLimit(enabled) => {
+                let conn = crate::bus::system().await?;
+                let device = charge_limit_device(&conn)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("No battery supports a charge limit"))?;
+                device.enable_charge_threshold(enabled).await?;
+                debug!("Set charge limit: {}", enabled);
+                // Some kernels apply it without a PropertiesChanged.
+                if let Some(limit) = self.data.lock_mut().charge_limit.as_mut() {
+                    limit.enabled = enabled;
+                }
             }
             UPowerCommand::Refresh => {
                 self.refresh().await?;
@@ -467,7 +533,7 @@ impl UPowerSubscriber {
                     async move {
                         if let Ok(value) = change.get().await {
                             debug!("On battery changed: {}", value);
-                            data.lock_mut().on_battery = value;
+                            data.lock_mut().on_battery = Some(value);
                         }
                     }
                 }
@@ -500,6 +566,28 @@ impl UPowerSubscriber {
             }
         };
 
+        let charge_limit_stream = match charge_limit_device(&conn).await {
+            Some(device) => device
+                .receive_charge_threshold_enabled_changed()
+                .await
+                .then({
+                    let data = data.clone();
+                    move |change| {
+                        let data = data.clone();
+                        async move {
+                            if let Ok(value) = change.get().await {
+                                debug!("Charge limit changed: {}", value);
+                                if let Some(limit) = data.lock_mut().charge_limit.as_mut() {
+                                    limit.enabled = value;
+                                }
+                            }
+                        }
+                    }
+                })
+                .boxed(),
+            None => futures_util::stream::pending().boxed(),
+        };
+
         // Combine all streams
         let mut events = select_all(vec![
             percentage_stream,
@@ -509,6 +597,7 @@ impl UPowerSubscriber {
             warning_stream,
             on_battery_stream,
             profile_stream,
+            charge_limit_stream,
         ]);
 
         // Process events; the handlers write as they go.

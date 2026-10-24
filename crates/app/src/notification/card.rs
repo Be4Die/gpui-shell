@@ -1,7 +1,26 @@
 use gpui::prelude::*;
-use gpui::{Context, MouseButton, div, img, px};
-use services::{Notification, NotificationCommand, NotificationSubscriber};
+use gpui::{App, Context, MouseButton, div, img, px};
+use services::{CompositorCommand, Notification, NotificationCommand, NotificationSubscriber};
 use ui::{ActiveTheme, Radius, Spacing, TextSize};
+
+use crate::state::AppState;
+
+/// A click on a card with a default action. Wayland apps can't raise their
+/// own window without an activation token, so the compositor focuses it.
+pub(super) fn activate_notification(notification: &Notification, cx: &mut App) {
+    let compositor = AppState::compositor(cx);
+    if let Some(window) = compositor
+        .get()
+        .app_window(notification.sender_pid, &notification.app_ids())
+    {
+        compositor.dispatch(CompositorCommand::FocusWindow(window.id.clone()));
+    }
+    AppState::notification(cx).dispatch(NotificationCommand::Activate(notification.id));
+}
+
+pub(super) fn is_critical(notification: &Notification) -> bool {
+    notification.urgency == 2
+}
 
 /// `compact`: one body line, no actions (a popup at rest).
 pub(super) fn notification_card_body<V>(
@@ -195,7 +214,9 @@ pub(super) fn notification_card_body<V>(
                                         el.bg(theme.colors.element_hover)
                                             .text_color(theme.colors.text)
                                     })
-                                    .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                        // Not a click on the card itself.
+                                        cx.stop_propagation();
                                         sub.dispatch(NotificationCommand::InvokeAction(
                                             notification_id,
                                             key.clone(),

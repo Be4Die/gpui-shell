@@ -116,9 +116,7 @@ mod tests {
             title: format!("{app_id} window"),
             monitor: "eDP-1".to_string(),
             workspace_id: 1,
-            is_focused: false,
-            is_minimized: false,
-            geometry: None,
+            ..Default::default()
         }
     }
 

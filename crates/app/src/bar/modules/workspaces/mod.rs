@@ -118,10 +118,11 @@ impl Workspaces {
         let workspace_id = ws.id;
         let is_active = active_workspace_id == Some(ws.id);
         let has_windows = ws.windows > 0;
+        let is_urgent = ws.has_urgent && !is_active;
         let label = Self::workspace_label(ws, is_vertical, config.show_numbers, config.show_icons);
 
         // Not a `ButtonLike`: the pill carries three background states
-        // (active / has windows / empty) and `ButtonStyle` has no per-state
+        // (active / has windows / empty) plus an urgent border, and `ButtonStyle` has no per-state
         // palette to express them.
         h_flex()
             .id(format!("workspace-{}", ws.id))
@@ -147,6 +148,9 @@ impl Workspaces {
             } else {
                 gpui::transparent_black()
             })
+            .when(is_urgent, |s| {
+                s.border_1().border_color(theme.colors.status.error)
+            })
             .hover(move |s| {
                 if is_active {
                     s.bg(theme.colors.accent)
@@ -160,6 +164,8 @@ impl Workspaces {
             .when(!label.is_empty(), |this| {
                 let color = if is_active {
                     theme.colors.background
+                } else if is_urgent {
+                    theme.colors.status.error
                 } else if has_windows {
                     theme.colors.text
                 } else {

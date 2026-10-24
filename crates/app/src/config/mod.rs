@@ -71,7 +71,7 @@ impl Config {
     /// next save fixes the file. `gpuishell --validate` reports where the
     /// parse gave up.
     pub fn init(cx: &mut App) {
-        let config = match persistence::load() {
+        let config = match persistence::load_or_create() {
             Ok(config) => config,
             Err(err) => {
                 tracing::warn!("Failed to load config, using defaults: {err:#}");

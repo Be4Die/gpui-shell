@@ -8,12 +8,13 @@ use std::time::Duration;
 
 use chrono::Utc;
 use futures_signals::signal::{Mutable, MutableSignalCloned};
-use tracing::warn;
+use tracing::{debug, warn};
 use zbus::{
     Connection,
     fdo::{DBusProxy, RequestNameFlags, RequestNameReply},
     interface,
-    names::WellKnownName,
+    message::Header,
+    names::{BusName, UniqueName, WellKnownName},
     object_server::SignalEmitter,
     proxy,
     zvariant::OwnedValue,
@@ -28,6 +29,7 @@ const NAME: WellKnownName =
     WellKnownName::from_static_str_unchecked("org.freedesktop.Notifications");
 const OBJECT_PATH: &str = "/org/freedesktop/Notifications";
 const DEFAULT_TIMEOUT_MS: i32 = 5000;
+const DEFAULT_ACTION_KEY: &str = "default";
 const MAX_NOTIFICATION_HISTORY: usize = 200;
 
 /// Held while claiming or releasing the bus name and object path, so a stop
@@ -50,6 +52,27 @@ pub struct Notification {
     pub timestamp_ms: i64,
     pub actions: Vec<(String, String)>,
     pub read: bool,
+    /// `desktop-entry` hint, without `.desktop`.
+    pub desktop_entry: Option<String>,
+    /// Pid of the D-Bus client that sent it (the portal's for sandboxed apps).
+    pub sender_pid: Option<u32>,
+}
+
+impl Notification {
+    pub fn has_default_action(&self) -> bool {
+        self.actions
+            .iter()
+            .any(|(key, _)| key == DEFAULT_ACTION_KEY)
+    }
+
+    /// App ids or window classes the sender's windows likely carry.
+    pub fn app_ids(&self) -> Vec<String> {
+        self.desktop_entry
+            .iter()
+            .chain(Some(&self.app_name).filter(|name| !name.is_empty()))
+            .cloned()
+            .collect()
+    }
 }
 
 /// Notification center state.
@@ -98,6 +121,8 @@ pub enum NotificationCommand {
     SetDnd(bool),
     MarkAllRead,
     InvokeAction(u32, String),
+    /// A click on the notification: invoke its default action, then dismiss.
+    Activate(u32),
     /// Pause popup expiry (pointer over the popups).
     HoldPopups(bool),
 }
@@ -223,9 +248,9 @@ impl NotificationSubscriber {
     fn target_ids(&self, command: &NotificationCommand) -> Vec<u32> {
         let data = self.data.lock_ref();
         match command {
-            NotificationCommand::Dismiss(id) | NotificationCommand::InvokeAction(id, _) => {
-                vec![*id]
-            }
+            NotificationCommand::Dismiss(id)
+            | NotificationCommand::InvokeAction(id, _)
+            | NotificationCommand::Activate(id) => vec![*id],
             NotificationCommand::DismissLatest => data
                 .notifications
                 .first()
@@ -240,8 +265,22 @@ impl NotificationSubscriber {
     }
 
     async fn execute(&self, command: NotificationCommand) -> anyhow::Result<()> {
-        if let NotificationCommand::InvokeAction(id, action_key) = &command {
-            self.emit_action_invoked(*id, action_key).await;
+        match &command {
+            NotificationCommand::InvokeAction(id, action_key) => {
+                self.emit_action_invoked(*id, action_key).await;
+            }
+            NotificationCommand::Activate(id) => {
+                let has_default = self
+                    .data
+                    .lock_ref()
+                    .notifications
+                    .iter()
+                    .any(|n| n.id == *id && n.has_default_action());
+                if has_default {
+                    self.emit_action_invoked(*id, DEFAULT_ACTION_KEY).await;
+                }
+            }
+            _ => {}
         }
         for id in self.target_ids(&command) {
             self.dismiss_by_id(id).await?;
@@ -427,6 +466,16 @@ impl NotificationServer {
             popups_held,
         }
     }
+
+    async fn sender_pid(&self, sender: &UniqueName<'_>) -> Option<u32> {
+        DBusProxy::new(&self.conn)
+            .await
+            .ok()?
+            .get_connection_unix_process_id(BusName::Unique(sender.clone()))
+            .await
+            .inspect_err(|e| debug!("No pid for notification sender {sender}: {e}"))
+            .ok()
+    }
 }
 
 #[interface(
@@ -470,7 +519,13 @@ impl NotificationServer {
         actions: Vec<String>,
         hints: HashMap<String, OwnedValue>,
         expire_timeout: i32,
+        #[zbus(header)] header: Header<'_>,
     ) -> u32 {
+        let sender_pid = match header.sender() {
+            Some(sender) => self.sender_pid(sender).await,
+            None => None,
+        };
+
         let id = {
             let existing = self
                 .data
@@ -518,11 +573,16 @@ impl NotificationServer {
         let app_icon_path = app_icon_path.or_else(|| {
             hint_string(&hints, &["desktop-entry"]).and_then(|entry| lookup_icon(&entry))
         });
-        let timeout_ms = if expire_timeout < 0 {
+        // The spec: critical notifications don't expire on their own.
+        let timeout_ms = if urgency == 2 {
+            0
+        } else if expire_timeout < 0 {
             DEFAULT_TIMEOUT_MS
         } else {
             expire_timeout
         };
+        let desktop_entry = hint_string(&hints, &["desktop-entry"])
+            .map(|entry| entry.strip_suffix(".desktop").unwrap_or(&entry).to_string());
         let parsed_actions = actions
             .chunks(2)
             .filter_map(|chunk| match chunk {
@@ -544,6 +604,8 @@ impl NotificationServer {
             timestamp_ms: Utc::now().timestamp_millis(),
             actions: parsed_actions,
             read: false,
+            desktop_entry,
+            sender_pid,
         };
 
         {

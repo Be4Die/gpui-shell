@@ -20,7 +20,7 @@ use crate::config::ActiveConfig;
 use crate::state::AppState;
 use crate::windows::WindowFit;
 
-use super::card::notification_card_body;
+use super::card::{activate_notification, is_critical, notification_card_body};
 use super::config::{NotificationConfig, NotificationPopupPosition};
 
 static POPUP_STATE: LazyLock<Mutex<HashMap<Option<DisplayId>, PopupWindowState>>> =
@@ -77,6 +77,7 @@ impl NotificationPopupStack {
         let theme = cx.theme();
         let dismiss_subscriber = self.subscriber.clone();
         let id = notification.id;
+        let clicked = notification.clone();
 
         div()
             .relative()
@@ -85,6 +86,15 @@ impl NotificationPopupStack {
             .panel_surface(cx)
             .p(Spacing::Medium.pixels())
             .when(!compact, |el| el.border_color(theme.colors.accent))
+            .when(is_critical(notification), |el| {
+                el.border_color(theme.colors.status.error)
+            })
+            .when(notification.has_default_action(), |el| {
+                el.cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        activate_notification(&clicked, cx);
+                    })
+            })
             .child(notification_card_body(
                 notification,
                 cx,
@@ -100,7 +110,8 @@ impl NotificationPopupStack {
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |_, _, _, _cx| {
+                        cx.listener(move |_, _, _, cx| {
+                            cx.stop_propagation();
                             dismiss_subscriber.dispatch(NotificationCommand::Dismiss(id));
                         }),
                     )

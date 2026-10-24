@@ -97,6 +97,9 @@ Commands use `CompositorCommand` enum with backend-specific implementations.
 
 ## Important Conventions
 
+- **Comments**: small and concise. One line that says *why* when the code
+  does not; no narration of what the code already shows, no essays in module
+  docs
 - **Async timers**: Use `cx.background_executor().timer(duration).await` (NOT
   `tokio::time::sleep`)
 - **Theme colors**: Access via `cx.theme().colors()` and `cx.theme().status()`

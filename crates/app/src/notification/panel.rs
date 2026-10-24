@@ -6,8 +6,9 @@ use ui::{ActiveTheme, Color, Icon, IconSize, Radius, Spacing, TextSize};
 
 use crate::config::ActiveConfig;
 use crate::state::watch;
+use crate::windows::ShellWindows;
 
-use super::card::notification_card_body;
+use super::card::{activate_notification, is_critical, notification_card_body};
 
 pub(super) struct NotificationCenter {
     subscriber: NotificationSubscriber,
@@ -46,6 +47,7 @@ impl Render for NotificationCenter {
                 .children(notifications.into_iter().map(|item| {
                     let dismiss_subscriber = self.subscriber.clone();
                     let id = item.id;
+                    let clicked = item.clone();
                     div()
                         .relative()
                         .w_full()
@@ -53,7 +55,19 @@ impl Render for NotificationCenter {
                         .rounded(Radius::Large.pixels())
                         .bg(theme.colors.background)
                         .border_1()
-                        .border_color(theme.colors.border)
+                        .border_color(if is_critical(&item) {
+                            theme.colors.status.error
+                        } else {
+                            theme.colors.border
+                        })
+                        .when(item.has_default_action(), |el| {
+                            el.cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                    activate_notification(&clicked, cx);
+                                    // Out of the way of the window it focused.
+                                    ShellWindows::close_panel(cx);
+                                })
+                        })
                         .child(notification_card_body(
                             &item,
                             cx,
@@ -69,7 +83,8 @@ impl Render for NotificationCenter {
                                 .cursor_pointer()
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(move |_, _, _, _cx| {
+                                    cx.listener(move |_, _, _, cx| {
+                                        cx.stop_propagation();
                                         dismiss_subscriber
                                             .dispatch(NotificationCommand::Dismiss(id));
                                     }),

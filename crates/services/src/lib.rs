@@ -59,7 +59,7 @@ pub use tray::{
     MenuLayout, MenuLayoutProps, TrayCommand, TrayData, TrayIcon, TrayItem, TraySubscriber,
 };
 pub use upower::{
-    BatteryData, BatteryLevel, BatteryState, PowerProfile, UPowerCommand, UPowerData,
+    BatteryData, BatteryLevel, BatteryState, ChargeLimit, PowerProfile, UPowerCommand, UPowerData,
     UPowerSubscriber, WarningLevel,
 };
 pub use wallpaper::{WallpaperCommand, WallpaperData, WallpaperEngine, WallpaperSubscriber};

@@ -25,7 +25,7 @@ pub use config::{ControlCenterConfig, PowerActionsConfig};
 
 use crate::icons;
 use gpui::{App, Context, FocusHandle, Focusable, MouseButton, Window, div, prelude::*, px};
-use services::{NetworkCommand, UPowerCommand};
+use services::{ChargeLimit, NetworkCommand, UPowerCommand};
 use std::rc::Rc;
 use ui::patterns::PanelSurface;
 use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize};
@@ -233,7 +233,7 @@ impl Render for ControlCenter {
                 .unwrap_or_else(|| "AC".to_string());
             let battery_sub = battery
                 .map(|b| {
-                    if let Some(time) = power::format_time_remaining(b) {
+                    let status = if let Some(time) = power::format_time_remaining(b) {
                         if b.is_charging() {
                             format!("{} to full", time)
                         } else {
@@ -241,11 +241,25 @@ impl Render for ControlCenter {
                         }
                     } else if b.is_charging() {
                         "Charging".to_string()
+                    } else if b.is_full() {
+                        "Fully charged".to_string()
+                    } else if upower.on_battery == Some(false) {
+                        // Charging paused, e.g. held at the charge limit.
+                        "Plugged in".to_string()
                     } else {
                         "On Battery".to_string()
+                    };
+                    match upower.charge_limit {
+                        Some(ChargeLimit {
+                            enabled: true,
+                            end_threshold: Some(end),
+                        }) => format!("{status} · limit {end}%"),
+                        _ => status,
                     }
                 })
                 .unwrap_or_else(|| "No battery".to_string());
+            let charge_limit = upower.charge_limit;
+            let upower_service = AppState::upower(cx).clone();
             let battery_color = if let Some(b) = battery {
                 if b.is_critical() {
                     theme.colors.status.error
@@ -566,6 +580,41 @@ impl Render for ControlCenter {
                                                 ),
                                         ),
                                 )
+                                .when_some(charge_limit, |el, limit| {
+                                    el.child(
+                                        div()
+                                            .id("charge-limit-toggle")
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .w(px(32.))
+                                            .h(px(32.))
+                                            .bg(interactive_default)
+                                            .border_1()
+                                            .border_color(if limit.enabled {
+                                                accent_primary
+                                            } else {
+                                                border_subtle
+                                            })
+                                            .rounded(Radius::Medium.pixels())
+                                            .cursor_pointer()
+                                            .hover(move |s| s.bg(interactive_hover))
+                                            .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                                                upower_service.dispatch(
+                                                    UPowerCommand::SetChargeLimit(!limit.enabled),
+                                                );
+                                            })
+                                            .child(
+                                                Icon::new(IconName::Heart)
+                                                    .size(IconSize::XSmall)
+                                                    .color(if limit.enabled {
+                                                        Color::Accent
+                                                    } else {
+                                                        Color::Muted
+                                                    }),
+                                            ),
+                                    )
+                                })
                                 .child(
                                     div()
                                         .id("power-profile-cycle")
