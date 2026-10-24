@@ -4,12 +4,15 @@
 //! display backlight brightness. Uses udev for device discovery and change
 //! monitoring, and D-Bus (systemd-logind) for unprivileged brightness control.
 
+use std::fs::File;
+use std::io::Read;
+use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use futures_signals::signal::{Mutable, MutableSignalCloned};
 use tokio::io::unix::AsyncFd;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 use zbus::proxy;
 
 use crate::jobs::JobQueue;
@@ -188,24 +191,7 @@ impl ManagedService for BrightnessSubscriber {
             self.lifecycle.set_unavailable();
             return;
         };
-
-        match read_brightness(&device_path) {
-            Ok(data) => {
-                info!(
-                    "Brightness service initialized: {} (max: {})",
-                    data.current, data.max
-                );
-                self.data.set_neq(data);
-            }
-            Err(e) => {
-                error!("Failed to read brightness: {}", e);
-                token.error(e.to_string());
-                return;
-            }
-        }
-
         self.device.set_neq(Some(device_path.clone()));
-        token.active();
 
         let subscriber = self.clone();
         self.jobs.run(token.clone(), move |command| {
@@ -213,7 +199,10 @@ impl ManagedService for BrightnessSubscriber {
             async move { subscriber.execute(command).await }
         });
 
-        start_listener(self.data.clone(), device_path, token);
+        let data = self.data.clone();
+        token.supervise(self.name(), move |token| {
+            run(data.clone(), device_path.clone(), token)
+        });
     }
 }
 
@@ -251,72 +240,35 @@ fn read_brightness(device_path: &Path) -> Result<BrightnessData> {
     Ok(BrightnessData { current, max })
 }
 
-/// Start the udev listener task for brightness changes.
-///
-/// The udev socket is not `Send`, so it lives on a blocking-pool thread; the
-/// loop runs under the token so a stop releases that thread right away.
-fn start_listener(data: Mutable<BrightnessData>, device_path: PathBuf, token: RunToken) {
-    tokio::task::spawn_blocking(move || {
-        let socket = match udev::MonitorBuilder::new()
-            .and_then(|b| b.match_subsystem("backlight"))
-            .and_then(|b| b.listen())
+/// One run: read the backlight, then follow its udev change events.
+async fn run(data: Mutable<BrightnessData>, device_path: PathBuf, token: RunToken) -> Result<()> {
+    // libudev is `!Send`, so it only sets up the socket: the subsystem filter
+    // lives on the kernel socket, which the duplicated fd keeps open.
+    let fd = udev::MonitorBuilder::new()?
+        .match_subsystem("backlight")?
+        .listen()?
+        .as_fd()
+        .try_clone_to_owned()?;
+    let mut socket = AsyncFd::new(File::from(fd))?;
+
+    // Read after subscribing, so a change in between is not lost.
+    let initial = read_brightness(&device_path)?;
+    info!("Brightness: {} (max: {})", initial.current, initial.max);
+    data.set_neq(initial);
+    token.active();
+
+    // Every message is a backlight event; the content is not needed.
+    let mut buf = [0u8; 8192];
+    loop {
+        let mut guard = socket.readable_mut().await?;
+        while let Ok(read) = guard.try_io(|socket| socket.get_mut().read(&mut buf)) {
+            read?;
+        }
+        if let Ok(new_data) = read_brightness(&device_path)
+            && data.lock_ref().current != new_data.current
         {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to create udev monitor: {}", e);
-                token.error(e.to_string());
-                return;
-            }
-        };
-
-        // Wrap the socket in AsyncFd for tokio async I/O
-        let async_socket = match AsyncFd::new(socket) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Failed to create async fd: {}", e);
-                token.error(e.to_string());
-                return;
-            }
-        };
-
-        let mut current_value = data.lock_ref().current;
-
-        // Use tokio's block_on to run async code in blocking context
-        let runtime = tokio::runtime::Handle::current();
-        runtime.block_on(token.run_until_cancelled(async {
-            loop {
-                // Wait asynchronously until the socket is readable
-                let mut guard = match async_socket.readable().await {
-                    Ok(g) => g,
-                    Err(e) => {
-                        error!("Failed to wait for readable: {}", e);
-                        token.error(e.to_string());
-                        break;
-                    }
-                };
-
-                // Try to read events
-                match guard.try_io(|inner| {
-                    // Drain all pending events
-                    for event in inner.get_ref().iter() {
-                        if event.event_type() == udev::EventType::Change
-                            && let Ok(new_data) = read_brightness(&device_path)
-                            && new_data.current != current_value
-                        {
-                            current_value = new_data.current;
-                            data.lock_mut().current = new_data.current;
-                            debug!("Brightness changed: {}", new_data.current);
-                        }
-                    }
-                    Ok::<(), std::io::Error>(())
-                }) {
-                    Ok(_) => {}
-                    Err(_would_block) => {
-                        // False alarm, socket not actually readable yet
-                        continue;
-                    }
-                }
-            }
-        }));
-    });
+            debug!("Brightness changed: {}", new_data.current);
+            data.lock_mut().current = new_data.current;
+        }
+    }
 }

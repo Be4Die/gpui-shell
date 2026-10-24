@@ -14,7 +14,6 @@ use futures_signals::signal::Mutable;
 use futures_util::StreamExt;
 use futures_util::stream::{BoxStream, select_all};
 use inotify::{Inotify, WatchMask};
-use std::process::Command;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::task::AbortHandle;
@@ -130,15 +129,16 @@ impl BluetoothSubscriber {
     }
 }
 
-/// Check if Bluetooth is soft-blocked by rfkill.
+/// Whether any Bluetooth radio is soft-blocked, read from sysfs instead of
+/// forking `rfkill` on every BlueZ signal.
 fn check_rfkill_soft_block() -> bool {
-    Command::new("rfkill")
-        .args(["list", "bluetooth"])
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|output| output.contains("Soft blocked: yes"))
-        .unwrap_or(false)
+    let Ok(entries) = std::fs::read_dir("/sys/class/rfkill") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let read = |name| std::fs::read_to_string(entry.path().join(name)).unwrap_or_default();
+        read("type").trim() == "bluetooth" && read("soft").trim() == "1"
+    })
 }
 
 /// Fetch the current Bluetooth data state.

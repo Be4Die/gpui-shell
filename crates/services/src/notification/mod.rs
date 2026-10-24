@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
 use futures_signals::signal::Mutable;
+use tokio::sync::watch;
 use tracing::{debug, warn};
 use zbus::{
     Connection,
@@ -131,7 +131,7 @@ pub enum NotificationCommand {
 pub struct NotificationSubscriber {
     core: crate::ServiceCore<NotificationData, NotificationCommand>,
     /// Expiry timers wait while set.
-    popups_held: Arc<AtomicBool>,
+    popups_held: Arc<watch::Sender<bool>>,
 }
 
 impl std::ops::Deref for NotificationSubscriber {
@@ -230,7 +230,7 @@ impl NotificationSubscriber {
                 data.recompute_unread();
             }
             NotificationCommand::HoldPopups(held) => {
-                self.popups_held.store(held, Ordering::Relaxed);
+                self.popups_held.send_replace(held);
             }
             command if !self.lifecycle.is_up() => {
                 for id in self.target_ids(&command) {
@@ -444,14 +444,14 @@ struct NotificationServer {
     next_id: u32,
     next_timer_generation: u64,
     timer_generations: Arc<Mutex<HashMap<u32, u64>>>,
-    popups_held: Arc<AtomicBool>,
+    popups_held: Arc<watch::Sender<bool>>,
 }
 
 impl NotificationServer {
     fn new(
         data: Mutable<NotificationData>,
         conn: Connection,
-        popups_held: Arc<AtomicBool>,
+        popups_held: Arc<watch::Sender<bool>>,
     ) -> Self {
         let next_id = first_free_id(&data.lock_ref());
         Self {
@@ -632,9 +632,8 @@ impl NotificationServer {
             let popups_held = self.popups_held.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(timeout_ms as u64)).await;
-                while popups_held.load(Ordering::Relaxed) {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                }
+                // Err only once the subscriber is gone; expire anyway.
+                let _ = popups_held.subscribe().wait_for(|held| !held).await;
 
                 let should_close = timer_generations
                     .lock()
