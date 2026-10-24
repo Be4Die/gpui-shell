@@ -69,7 +69,7 @@ impl LauncherView for AppsView {
         };
 
         let theme = cx.theme();
-        let exec = app.exec.clone();
+        let app_to_launch = app.clone();
         let interactive_default = theme.colors.element_background;
         let fallback_icon = self.icon();
         ListItem::new(format!("app-{}", app.name))
@@ -93,7 +93,7 @@ impl LauncherView for AppsView {
                     }),
             )
             .on_click(move |_, _, _cx| {
-                launch_app(&exec);
+                app_to_launch.launch();
             })
             .child(
                 div()
@@ -114,32 +114,10 @@ impl LauncherView for AppsView {
 
     fn on_select(&self, index: usize, _vx: &ViewContext, cx: &mut App) -> bool {
         if let Some(app) = self.app(index, cx) {
-            launch_app(&app.exec);
+            app.launch();
             true
         } else {
             false
         }
     }
-}
-
-fn launch_app(exec: &str) {
-    let exec = exec.to_string();
-    std::thread::spawn(move || {
-        let exec_cleaned = exec
-            .replace("%f", "")
-            .replace("%F", "")
-            .replace("%u", "")
-            .replace("%U", "")
-            .replace("%d", "")
-            .replace("%D", "")
-            .replace("%n", "")
-            .replace("%N", "")
-            .replace("%i", "")
-            .replace("%c", "")
-            .replace("%k", "");
-
-        let _ = std::process::Command::new("sh")
-            .args(["-c", &exec_cleaned])
-            .spawn();
-    });
 }
