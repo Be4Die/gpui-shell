@@ -71,7 +71,7 @@ fn window_options(display_id: Option<DisplayId>, cx: &App) -> WindowOptions {
 fn open_with_config(display_id: Option<DisplayId>, cx: &mut App) -> bool {
     match cx.open_window(window_options(display_id, cx), move |window, cx| {
         record_window_display(window.window_handle(), display_id, cx);
-        cx.new(Dock::new)
+        cx.new(|cx| Dock::new(display_id, cx))
     }) {
         Ok(_) => true,
         Err(err) => {

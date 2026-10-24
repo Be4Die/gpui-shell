@@ -12,7 +12,7 @@ mod window;
 pub use config::{DockConfig, DockHoverEffect, DockMonitors, DockVisibility};
 pub use window::{init, reload};
 
-use gpui::{AnyElement, App, Context, Render, Size, Window, div, img, prelude::*, px};
+use gpui::{AnyElement, App, Context, DisplayId, Render, Size, Window, div, img, prelude::*, px};
 use std::collections::HashMap;
 use ui::{ActiveTheme, Radius, Spacing, TextSize};
 
@@ -165,6 +165,7 @@ fn dock_window_size(
 
 /// The dock's own view, rendered in a standalone layer-shell window.
 pub(super) struct Dock {
+    display_id: Option<DisplayId>,
     compositor: services::CompositorSubscriber,
     state: services::CompositorState,
     cycle_index: HashMap<String, usize>,
@@ -178,20 +179,28 @@ pub(super) struct Dock {
 }
 
 impl Dock {
-    pub(super) fn new(cx: &mut Context<Self>) -> Self {
+    pub(super) fn new(display_id: Option<DisplayId>, cx: &mut Context<Self>) -> Self {
         let compositor = AppState::compositor(cx).clone();
         let state = compositor.get();
 
         watch(cx, compositor.subscribe(), |this, new_state, cx| {
             this.state = new_state;
+            this.update_visibility(cx);
             cx.notify();
         });
         let signals = ConfigSignals::global(cx);
         let (dock, pinned) = (signals.dock.signal_cloned(), signals.pinned.signal_cloned());
-        watch(cx, dock, |_, _, cx| cx.notify());
-        watch(cx, pinned, |_, _, cx| cx.notify());
+        watch(cx, dock, |this, _, cx| {
+            this.update_visibility(cx);
+            cx.notify();
+        });
+        watch(cx, pinned, |this, _, cx| {
+            this.update_visibility(cx);
+            cx.notify();
+        });
 
-        Self {
+        let mut dock = Self {
+            display_id,
             compositor,
             state,
             cycle_index: HashMap::new(),
@@ -201,11 +210,59 @@ impl Dock {
             menu_hold: false,
             reveal_generation: 0,
             hide_generation: 0,
-        }
+        };
+        dock.update_visibility(cx);
+        dock
     }
 
-    fn current_monitor_name(&self, window: &Window, cx: &App) -> Option<String> {
-        monitor_name_for_display(display_id_for_window(window, cx), &self.state, cx)
+    fn current_monitor_name(&self, cx: &App) -> Option<String> {
+        monitor_name_for_display(self.display_id, &self.state, cx)
+    }
+
+    fn dock_size(&self, item_count: usize, cx: &App) -> Size<gpui::Pixels> {
+        let config = &cx.config().dock;
+        dock_window_size(
+            config.position,
+            config.icon_size,
+            item_count + 1,
+            config.hover_effect,
+        )
+    }
+
+    /// Re-run the hide rule against the latest compositor state and config.
+    fn update_visibility(&mut self, cx: &mut Context<Self>) {
+        let dock_size = self.dock_size(self.items(cx).len(), cx);
+        let hide_behavior = self.hide_behavior(dock_size, cx);
+        let is_hidden_by_rule = hide_behavior.hides();
+        match initial_hide_action(self.hidden_by_rule, hide_behavior) {
+            InitialHideAction::Reveal => {
+                self.hide_generation += 1;
+                self.revealed = true;
+            }
+            InitialHideAction::Keep => {
+                self.revealed = revealed_after_visibility_update(
+                    self.hidden_by_rule,
+                    self.revealed,
+                    is_hidden_by_rule,
+                );
+            }
+            InitialHideAction::HideNow => self.revealed = false,
+            InitialHideAction::ScheduleDelayedHide => self.schedule_initial_hide(cx),
+        }
+        self.hidden_by_rule = is_hidden_by_rule;
+
+        if self.pointer_inside {
+            self.revealed = true;
+        }
+
+        // Stay revealed while a dock menu is open; the timer re-arms until it closes.
+        if dock_menu_is_open(cx) {
+            self.revealed = true;
+            if !self.menu_hold {
+                self.menu_hold = true;
+                self.schedule_rehide(cx);
+            }
+        }
     }
 
     /// The focused window's full record, cross-referenced from the active
@@ -219,13 +276,8 @@ impl Dock {
     }
 
     /// Whether the dock should be hidden for the configured visibility mode.
-    fn hide_behavior(
-        &self,
-        window: &Window,
-        dock_size: Size<gpui::Pixels>,
-        cx: &App,
-    ) -> DockHideBehavior {
-        let monitor_name = self.current_monitor_name(window, cx);
+    fn hide_behavior(&self, dock_size: Size<gpui::Pixels>, cx: &App) -> DockHideBehavior {
+        let monitor_name = self.current_monitor_name(cx);
         let focused_window = self.focused_window();
 
         // Our own window holds the keyboard; the windows underneath did not move.
@@ -318,13 +370,13 @@ impl Dock {
         .detach();
     }
 
-    fn items(&self, window: &Window, cx: &App) -> Vec<DockItem> {
+    fn items(&self, cx: &App) -> Vec<DockItem> {
         let apps = AppState::applications(cx).all();
         dock_items(
             &self.state.windows,
             apps,
             State::pinned(cx),
-            self.current_monitor_name(window, cx).as_deref(),
+            self.current_monitor_name(cx).as_deref(),
         )
     }
 
@@ -430,9 +482,9 @@ impl Dock {
             .gap(px(2.0))
             .on_mouse_down(
                 gpui::MouseButton::Left,
-                cx.listener(move |this, _event, window, cx| {
+                cx.listener(move |this, _event, _window, cx| {
                     if let Some(item) = this
-                        .items(window, cx)
+                        .items(cx)
                         .into_iter()
                         .find(|item| item.key == item_key)
                     {
@@ -507,44 +559,8 @@ impl Render for Dock {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         window.set_rem_size(cx.theme().font_size);
         let position = cx.config().dock.position;
-        let items = self.items(window, cx);
-        let dock_size = dock_window_size(
-            position,
-            cx.config().dock.icon_size,
-            items.len() + 1,
-            cx.config().dock.hover_effect,
-        );
-        let hide_behavior = self.hide_behavior(window, dock_size, cx);
-        let is_hidden_by_rule = hide_behavior.hides();
-        match initial_hide_action(self.hidden_by_rule, hide_behavior) {
-            InitialHideAction::Reveal => {
-                self.hide_generation += 1;
-                self.revealed = true;
-            }
-            InitialHideAction::Keep => {
-                self.revealed = revealed_after_visibility_update(
-                    self.hidden_by_rule,
-                    self.revealed,
-                    is_hidden_by_rule,
-                );
-            }
-            InitialHideAction::HideNow => self.revealed = false,
-            InitialHideAction::ScheduleDelayedHide => self.schedule_initial_hide(cx),
-        }
-        self.hidden_by_rule = is_hidden_by_rule;
-
-        if self.pointer_inside {
-            self.revealed = true;
-        }
-
-        // Stay revealed while a dock menu is open; the timer re-arms until it closes.
-        if dock_menu_is_open(cx) {
-            self.revealed = true;
-            if !self.menu_hold {
-                self.menu_hold = true;
-                self.schedule_rehide(cx);
-            }
-        }
+        let items = self.items(cx);
+        let dock_size = self.dock_size(items.len(), cx);
 
         if !self.revealed {
             let strip_size = hidden_strip_size(position, dock_size);

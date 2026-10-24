@@ -525,8 +525,12 @@ impl ShellWindows {
     /// Close the open panel, if any.
     pub fn close_panel(cx: &mut App) {
         if let Some(open) = cx.default_global::<Self>().panel.take() {
-            let _ = cx.update_window(open.handle, |_, window, _cx| {
-                window.remove_window();
+            // A panel closing itself is mid-update and `update_window` would
+            // fail, leaving it open but untracked; remove it once that ends.
+            cx.defer(move |cx| {
+                let _ = cx.update_window(open.handle, |_, window, _cx| {
+                    window.remove_window();
+                });
             });
         }
     }
