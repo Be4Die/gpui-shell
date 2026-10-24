@@ -3,7 +3,7 @@
 //! Displays available networks with signal strength and connection status.
 //! Supports connecting to open and protected networks with password input.
 
-use gpui::{App, ElementId, MouseButton, SharedString, div, prelude::*, px};
+use gpui::{App, ElementId, MouseButton, SharedString, div, prelude::*};
 use services::{AccessPoint, NetworkCommand};
 use ui::{
     ActiveTheme, Color, Icon, IconName, IconSize, InputBuffer, Radius, Spacing, Spinner, TextSize,
@@ -12,7 +12,7 @@ use ui::{
 
 use crate::state::AppState;
 
-use super::tooltip::control_center_tooltip;
+use super::list;
 use crate::icons;
 
 /// State for WiFi password input
@@ -51,18 +51,25 @@ impl WifiPasswordState {
     }
 }
 
+/// What a click in the WiFi section asks the control center to do.
+pub enum WifiAction {
+    /// Ask for a password before connecting.
+    Prompt(String),
+    Connect {
+        ssid: String,
+        password: Option<String>,
+    },
+    Disconnect(String),
+    CancelPassword,
+}
+
 /// Render the WiFi section (network list)
 pub fn render_wifi_section(
     password_state: &WifiPasswordState,
-    on_connect: impl Fn(String, Option<String>, &mut App) + Clone + 'static,
-    on_disconnect: impl Fn(String, &mut App) + Clone + 'static,
-    on_cancel_password: impl Fn(&mut App) + Clone + 'static,
+    on_action: impl Fn(WifiAction, &mut App) + Clone + 'static,
     cx: &App,
 ) -> impl IntoElement {
-    let theme = cx.theme();
     let network = AppState::network(cx).get();
-    let list_bg = theme.colors.background;
-    let list_border = theme.colors.border_variant;
 
     // Get current connected WiFi SSID
     let connected_name = network.active_connections.iter().find_map(|c| {
@@ -87,315 +94,149 @@ pub fn render_wifi_section(
         }
     });
 
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(Spacing::Medium.pixels())
-        .child(
-            // Section header
-            div()
-                .flex()
-                .items_center()
-                .gap(Spacing::Medium.pixels())
-                .child(
-                    Icon::new(IconName::Wifi)
-                        .size(IconSize::XSmall)
-                        .color(Color::Default),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(TextSize::Small.rems())
-                        .text_color(theme.colors.text)
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child("WiFi"),
-                )
+    list::section(
+        IconName::Wifi,
+        "WiFi",
+        |header| {
+            header
                 .when_some(connected_name.clone(), |el, name| {
                     el.child(
                         div()
                             .text_size(TextSize::XSmall.rems())
-                            .text_color(theme.colors.text)
+                            .text_color(cx.theme().colors.text)
                             .child(format!("- {}", name)),
                     )
                 })
-                .child(render_refresh_button(scanning, cx)),
+                .child(render_refresh_button(scanning, cx))
+        },
+        cx,
+    )
+    .when(wifi_enabled && scanning, |el| {
+        el.child(list::hint("Scanning...", cx))
+    })
+    .when(!wifi_enabled, |el| {
+        el.child(list::empty_state("WiFi is off", cx))
+    })
+    .when(wifi_enabled && aps.is_empty(), |el| {
+        el.child(list::empty_state("No networks found", cx))
+    })
+    .when(wifi_enabled && !aps.is_empty(), |el| {
+        el.child(
+            list::list("wifi-networks-list", cx).children(aps.into_iter().enumerate().map(
+                |(idx, ap)| {
+                    let on_action = on_action.clone();
+                    if password_state.is_entering_for(&ap.ssid) {
+                        render_password_input(idx, ap.ssid, password_state, on_action, cx)
+                            .into_any_element()
+                    } else {
+                        let connected = connected_name.as_ref() == Some(&ap.ssid);
+                        render_network_item(idx, ap, connected, on_action, cx).into_any_element()
+                    }
+                },
+            )),
         )
-        .when(wifi_enabled && scanning, |el| {
-            el.child(
-                div()
-                    .text_size(TextSize::XSmall.rems())
-                    .text_color(theme.colors.text_muted)
-                    .child("Scanning..."),
-            )
-        })
-        .when(!wifi_enabled, |el| {
-            el.child(
-                div()
-                    .py(Spacing::Large.pixels())
-                    .text_size(TextSize::Small.rems())
-                    .text_color(theme.colors.text_muted)
-                    .text_center()
-                    .child("WiFi is off"),
-            )
-        })
-        .when(wifi_enabled && aps.is_empty(), |el| {
-            el.child(
-                div()
-                    .py(Spacing::Large.pixels())
-                    .text_size(TextSize::Small.rems())
-                    .text_color(theme.colors.text_muted)
-                    .text_center()
-                    .child("No networks found"),
-            )
-        })
-        .when(wifi_enabled && !aps.is_empty(), |el| {
-            el.child(
-                div()
-                    .id("wifi-networks-list")
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .max_h(px(240.))
-                    .overflow_y_scroll()
-                    .bg(list_bg)
-                    .border_1()
-                    .border_color(list_border)
-                    .rounded(Radius::Small.pixels())
-                    .py(Spacing::XSmall.pixels())
-                    .children(aps.into_iter().enumerate().map(|(idx, ap)| {
-                        let is_connected = connected_name.as_ref() == Some(&ap.ssid);
-                        let is_entering_password = password_state.is_entering_for(&ap.ssid);
-                        let ssid = ap.ssid.clone();
-                        let ssid_for_display = ssid.clone();
-                        let ssid_for_callback = ssid.clone();
-                        let is_secured = !ap.public;
-                        let is_known = ap.known;
-                        let on_connect = on_connect.clone();
-                        let on_disconnect = on_disconnect.clone();
-                        let on_cancel = on_cancel_password.clone();
-                        let current_password = password_state.input.clone();
-                        let is_connecting = password_state.connecting;
-                        let disconnect_ssid = connected_name.clone();
-
-                        if is_entering_password {
-                            let ssid_submit = ssid.clone();
-                            render_password_input(
-                                idx,
-                                &ssid_for_display,
-                                &current_password,
-                                is_connecting,
-                                password_state.error.as_deref(),
-                                move |password, cx| {
-                                    let ssid = ssid_submit.clone();
-                                    on_connect(ssid, Some(password), cx);
-                                },
-                                on_cancel,
-                                cx,
-                            )
-                            .into_any_element()
-                        } else {
-                            render_network_item(
-                                idx,
-                                &ssid_for_display,
-                                ap.strength,
-                                is_secured,
-                                is_known,
-                                is_connected,
-                                disconnect_ssid.clone(),
-                                move |cx| {
-                                    if is_connected {
-                                        // Already connected, do nothing or disconnect
-                                        return;
-                                    }
-
-                                    let ssid = ssid_for_callback.clone();
-
-                                    if is_secured && !is_known {
-                                        // Need password - this will be handled by the parent
-                                        on_connect(ssid, None, cx);
-                                    } else {
-                                        // Open network or known network - connect directly
-                                        // For known networks, NM will use saved credentials
-                                        on_connect(ssid, Some(String::new()), cx);
-                                    }
-                                },
-                                move |path, cx| {
-                                    on_disconnect(path, cx);
-                                },
-                                cx,
-                            )
-                            .into_any_element()
-                        }
-                    })),
-            )
-        })
+    })
 }
 
 /// Render a single network item in the list
-#[allow(clippy::too_many_arguments)]
 fn render_network_item(
     index: usize,
-    ssid: &str,
-    strength: u8,
-    secured: bool,
-    known: bool,
+    ap: AccessPoint,
     connected: bool,
-    disconnect_ssid: Option<String>,
-    on_click: impl Fn(&mut App) + 'static,
-    on_disconnect: impl Fn(String, &mut App) + 'static,
+    on_action: impl Fn(WifiAction, &mut App) + Clone + 'static,
     cx: &App,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let signal_icon = icons::wifi_signal_icon(strength);
+    let secured = !ap.public;
+    let known = ap.known;
+    let text_muted = theme.colors.text_muted;
+    let status_success = theme.colors.status.success;
     let lock_tooltip = if known {
         "Secured (saved)"
     } else {
         "Secured (password required)"
     };
 
-    // Pre-compute colors for closures
-    let accent_selection = theme.colors.element_selected;
-    let interactive_hover = theme.colors.element_hover;
-    let accent_primary = theme.colors.accent;
-    let text_muted = theme.colors.text_muted;
-    let text_primary = theme.colors.text;
-    let status_success = theme.colors.status.success;
-
-    div()
-        .id(ElementId::Name(SharedString::from(format!(
-            "wifi-{}",
-            index
-        ))))
-        .flex()
-        .items_center()
-        .gap(Spacing::Medium.pixels())
-        .w_full()
-        .px(Spacing::Medium.pixels())
-        .py(Spacing::XSmall.pixels())
-        .rounded(Radius::Small.pixels())
-        .cursor_pointer()
-        .when(connected, move |el| el.bg(accent_selection))
-        .when(!connected, move |el| {
-            el.hover(move |s| s.bg(interactive_hover))
+    list::row(format!("wifi-{index}"), connected, cx)
+        .on_mouse_down(MouseButton::Left, {
+            let ssid = ap.ssid.clone();
+            let on_action = on_action.clone();
+            move |_, _, cx| {
+                if connected {
+                    return;
+                }
+                let ssid = ssid.clone();
+                // Known networks connect with NM's saved credentials.
+                on_action(
+                    if secured && !known {
+                        WifiAction::Prompt(ssid)
+                    } else {
+                        WifiAction::Connect {
+                            ssid,
+                            password: None,
+                        }
+                    },
+                    cx,
+                );
+            }
         })
-        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-            on_click(cx);
-        })
-        // Signal strength icon
-        .child(
-            div()
-                .id(format!("wifi-signal-{}", index))
-                .child(
-                    Icon::new(signal_icon)
-                        .size(IconSize::XSmall)
-                        .color(Color::Custom(if connected {
-                            accent_primary
-                        } else {
-                            text_muted
-                        })),
-                )
-                .tooltip(control_center_tooltip(format!(
-                    "Signal strength: {}%",
-                    strength
-                ))),
-        )
-        // Network name
-        .child(
-            div()
-                .flex_1()
-                .text_size(TextSize::Small.rems())
-                .text_color(text_primary)
-                .overflow_hidden()
-                .child(ssid.to_string()),
-        )
+        .child(list::row_icon(
+            format!("wifi-signal-{index}"),
+            icons::wifi_signal_icon(ap.strength),
+            connected,
+            format!("Signal strength: {}%", ap.strength),
+            cx,
+        ))
+        .child(list::row_label(ap.ssid.clone(), cx))
         .when(known && !connected, |el| {
-            el.child(
-                div()
-                    .id(format!("wifi-known-{}", index))
-                    .child(
-                        Icon::new(IconName::Check)
-                            .size(IconSize::XSmall)
-                            .color(Color::Custom(status_success)),
-                    )
-                    .tooltip(control_center_tooltip("Saved network")),
-            )
+            el.child(list::badge(
+                format!("wifi-known-{index}"),
+                IconName::Check,
+                status_success,
+                "Saved network",
+            ))
         })
-        // Lock icon for secured networks (green if known/saved)
-        .when(secured, move |el| {
-            el.child(
-                div()
-                    .id(format!("wifi-lock-{}", index))
-                    .child(
-                        Icon::new(IconName::Lock)
-                            .size(IconSize::XSmall)
-                            .color(Color::Custom(if known {
-                                status_success
-                            } else {
-                                text_muted
-                            })),
-                    )
-                    .tooltip(control_center_tooltip(lock_tooltip)),
-            )
+        .when(secured, |el| {
+            el.child(list::badge(
+                format!("wifi-lock-{index}"),
+                IconName::Lock,
+                if known { status_success } else { text_muted },
+                lock_tooltip,
+            ))
         })
         .when(!connected, |el| {
-            el.child(
-                div()
-                    .id(format!("wifi-connect-{}", index))
-                    .child(
-                        Icon::new(IconName::ChevronRight)
-                            .size(IconSize::XSmall)
-                            .color(Color::Muted),
-                    )
-                    .tooltip(control_center_tooltip("Connect")),
-            )
+            el.child(list::badge(
+                format!("wifi-connect-{index}"),
+                IconName::ChevronRight,
+                text_muted,
+                "Connect",
+            ))
         })
-        .when(connected, move |el| {
-            let disconnect_ssid = disconnect_ssid.clone();
-            el.child(
-                div()
-                    .id(ElementId::Name(SharedString::from(format!(
-                        "wifi-disconnect-{}",
-                        index
-                    ))))
-                    .w(px(22.))
-                    .h(px(22.))
-                    .rounded(Radius::Small.pixels())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(interactive_hover))
-                    .tooltip(control_center_tooltip("Disconnect"))
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        if let Some(ssid) = disconnect_ssid.clone() {
-                            on_disconnect(ssid, cx);
-                        }
-                    })
-                    .child(
-                        Icon::new(IconName::Close)
-                            .size(IconSize::XSmall)
-                            .color(Color::Custom(status_success)),
-                    ),
-            )
+        .when(connected, |el| {
+            let ssid = ap.ssid.clone();
+            el.child(list::action_button(
+                format!("wifi-disconnect-{index}"),
+                IconName::Close,
+                status_success,
+                "Disconnect",
+                move |cx| on_action(WifiAction::Disconnect(ssid.clone()), cx),
+                cx,
+            ))
         })
 }
 
 /// Render password input row for a network
-#[allow(clippy::too_many_arguments)]
 fn render_password_input(
     index: usize,
-    ssid: &str,
-    current_password: &InputBuffer,
-    connecting: bool,
-    error: Option<&str>,
-    on_submit: impl Fn(String, &mut App) + 'static,
-    on_cancel: impl Fn(&mut App) + 'static,
+    ssid: String,
+    state: &WifiPasswordState,
+    on_action: impl Fn(WifiAction, &mut App) + Clone + 'static,
     cx: &App,
 ) -> impl IntoElement {
     let theme = cx.theme();
-    let password_for_submit = current_password.text().to_string();
-    let password_line = render_masked_input_line(current_password, "Type password...", '•', cx);
+    let connecting = state.connecting;
+    let password_for_submit = state.input.text().to_string();
+    let password_line = render_masked_input_line(&state.input, "Type password...", '•', cx);
 
     // Pre-compute colors for closures
     let bg_tertiary = theme.colors.elevated_surface_background;
@@ -405,6 +246,7 @@ fn render_password_input(
     let text_primary = theme.colors.text;
     let text_muted = theme.colors.text_muted;
     let status_error = theme.colors.status.error;
+    let on_cancel = on_action.clone();
 
     div()
         .id(ElementId::Name(SharedString::from(format!(
@@ -436,14 +278,14 @@ fn render_password_input(
                         .text_size(TextSize::Small.rems())
                         .text_color(text_primary)
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(ssid.to_string()),
+                        .child(ssid.clone()),
                 )
                 .child(
                     div()
                         .id(format!("wifi-cancel-{}", index))
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                            on_cancel(cx);
+                            on_cancel(WifiAction::CancelPassword, cx);
                         })
                         .child(
                             Icon::new(IconName::Close)
@@ -486,7 +328,13 @@ fn render_password_input(
                         .when(connecting, |el| el.opacity(0.7))
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             if !connecting {
-                                on_submit(password_for_submit.clone(), cx);
+                                on_action(
+                                    WifiAction::Connect {
+                                        ssid: ssid.clone(),
+                                        password: Some(password_for_submit.clone()),
+                                    },
+                                    cx,
+                                );
                             }
                         })
                         .child(
@@ -509,35 +357,23 @@ fn render_password_input(
                 .child("Press Enter to connect, Escape to cancel"),
         )
         // Error message
-        .when_some(error, |el, err| {
+        .when_some(state.error.clone(), |el, err| {
             el.child(
                 div()
                     .text_size(TextSize::XSmall.rems())
                     .text_color(status_error)
-                    .child(err.to_string()),
+                    .child(err),
             )
         })
 }
 
 /// Render a refresh button for rescanning networks. It spins, and ignores
 /// clicks, while a scan is running.
-pub fn render_refresh_button(scanning: bool, cx: &App) -> impl IntoElement {
-    let theme = cx.theme();
+fn render_refresh_button(scanning: bool, cx: &App) -> impl IntoElement {
     let services = AppState::network(cx).clone();
+    let interactive_hover = cx.theme().colors.element_hover;
 
-    // Pre-compute colors for closures
-    let interactive_default = theme.colors.element_background;
-    let interactive_hover = theme.colors.element_hover;
-
-    div()
-        .id("wifi-refresh")
-        .flex()
-        .items_center()
-        .justify_center()
-        .w(px(24.))
-        .h(px(24.))
-        .rounded(Radius::Small.pixels())
-        .bg(interactive_default)
+    list::header_button("wifi-refresh", cx)
         .when(scanning, |el| {
             el.child(
                 Spinner::new()

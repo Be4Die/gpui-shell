@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use futures_signals::signal::{Signal, SignalExt};
 use futures_util::StreamExt;
-use gpui::{AnyWindowHandle, App, Context, DisplayId, Global, Window};
+use gpui::{AnyWindowHandle, App, Context, DisplayId, Global, Task, Window};
 use services::{ManagedService, ServiceMode};
 
 use crate::config::State;
@@ -159,6 +159,17 @@ where
     T: Clone + PartialEq + 'static,
     F: Fn(&mut C, T, &mut Context<C>) + 'static,
 {
+    watch_task(cx, signal, on_update).detach();
+}
+
+/// [`watch`] that stops when the returned task is dropped.
+pub(crate) fn watch_task<C, S, T, F>(cx: &mut Context<C>, signal: S, on_update: F) -> Task<()>
+where
+    C: 'static,
+    S: Signal<Item = T> + Unpin + 'static,
+    T: Clone + PartialEq + 'static,
+    F: Fn(&mut C, T, &mut Context<C>) + 'static,
+{
     cx.spawn(async move |this, cx| {
         let mut stream = signal.to_stream();
         let mut previous = None;
@@ -178,7 +189,6 @@ where
             }
         }
     })
-    .detach();
 }
 
 /// Global runtime state shared across views/widgets.
