@@ -77,8 +77,8 @@ Windows are matched to compositor monitors by output name
 
 - **Bar module:** a directory in `app/src/bar/modules/`, registered in
   `modules/registry.rs`.
-- **Launcher view:** implement `LauncherView` in `app/src/launcher/modules/`
-  with a unique `prefix()`.
+- **Launcher view:** a directory in `app/src/launcher/views/` implementing
+  `LauncherView`, registered in `views/mod.rs`.
 - **Service:** a module in `services/src/` implementing `ManagedService`,
   registered in `app/src/state.rs` and the `[services]` config.
 - **Component or pattern:** in `crates/ui`, with a story in `crates/story`.

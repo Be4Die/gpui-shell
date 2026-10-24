@@ -5,6 +5,7 @@ pub mod components;
 pub mod patterns;
 pub mod styles;
 mod theme;
+pub mod thumbnail;
 pub mod traits;
 
 pub use components::*;
@@ -17,6 +18,7 @@ pub use theme::{
     StatusColorsRefinement, StoredTheme, TextSize, Theme, ThemeColors, ThemeColorsRefinement,
     ThemeScheme, builtin_schemes,
 };
+pub use thumbnail::{Thumbnail, ThumbnailCache, ThumbnailKey};
 pub use traits::*;
 
 /// Register the default keybindings for components that need them -

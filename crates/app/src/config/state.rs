@@ -10,13 +10,15 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use gpui::{App, Global};
+use gpui::{App, AppContext, Global};
 use serde::{Deserialize, Serialize};
 use services::ServiceMode;
 
-use super::{ActiveConfig, ConfigSignals};
 use super::persistence::{config_dir, parse_toml, write_toml};
+use super::{ActiveConfig, ConfigSignals};
 
 /// State written by the shell itself.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -27,9 +29,23 @@ pub struct State {
     pinned: Option<Vec<String>>,
     /// Overrides `[services]`, per service.
     services: BTreeMap<String, ServiceMode>,
+    /// Overrides the wallpaper view's matugen defaults.
+    wallpaper: WallpaperToggles,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(default)]
+struct WallpaperToggles {
+    matugen: Option<bool>,
+    dark_mode: Option<bool>,
 }
 
 impl Global for State {}
+
+/// Last save generation handed out, and the last one written. Saves run on
+/// the background executor, so an older one finishing late must not land.
+static NEXT_SAVE: AtomicU64 = AtomicU64::new(0);
+static WRITTEN_SAVE: Mutex<u64> = Mutex::new(0);
 
 impl State {
     /// Load `state.toml` into the global. A broken one is not worth a fuss:
@@ -72,11 +88,41 @@ impl State {
         Self::save(cx);
     }
 
+    /// Wallpaper matugen `(enabled, dark_mode)`: what the UI last saved, else
+    /// `[launcher.views.wallpaper]`.
+    pub fn wallpaper_toggles(cx: &App) -> (bool, bool) {
+        let saved = cx.global::<Self>().wallpaper;
+        let config = &cx.config().launcher.views.wallpaper;
+        (
+            saved.matugen.unwrap_or(config.matugen),
+            saved.dark_mode.unwrap_or(config.dark_mode),
+        )
+    }
+
+    pub fn set_wallpaper_toggles(matugen: bool, dark_mode: bool, cx: &mut App) {
+        cx.global_mut::<Self>().wallpaper = WallpaperToggles {
+            matugen: Some(matugen),
+            dark_mode: Some(dark_mode),
+        };
+        Self::save(cx);
+    }
+
     fn save(cx: &App) {
-        let state = cx.global::<Self>();
-        if let Err(err) = state_path().and_then(|path| write_toml(&path, state)) {
-            tracing::warn!("Failed to persist state: {err:#}");
-        }
+        let state = cx.global::<Self>().clone();
+        let generation = NEXT_SAVE.fetch_add(1, Ordering::Relaxed) + 1;
+        cx.background_spawn(async move {
+            let Ok(mut written) = WRITTEN_SAVE.lock() else {
+                return;
+            };
+            if *written > generation {
+                return;
+            }
+            match state_path().and_then(|path| write_toml(&path, &state)) {
+                Ok(()) => *written = generation,
+                Err(err) => tracing::warn!("Failed to persist state: {err:#}"),
+            }
+        })
+        .detach();
     }
 }
 
@@ -134,6 +180,7 @@ mod tests {
         let state = State {
             pinned: Some(vec!["firefox.desktop".to_string()]),
             services: modes(&[("tray", ServiceMode::Off)]),
+            ..State::default()
         };
 
         let encoded = toml::to_string_pretty(&state).expect("state serializes");

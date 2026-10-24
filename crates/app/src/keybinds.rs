@@ -6,6 +6,8 @@ actions!(
     [
         Cancel,
         Confirm,
+        // Runs a launcher item's second action
+        SecondaryConfirm,
         // Launcher list navigation
         CursorUp,
         CursorDown,
@@ -32,6 +34,7 @@ pub fn register(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("escape", Cancel, Some("Launcher")),
         KeyBinding::new("enter", Confirm, Some("Launcher")),
+        KeyBinding::new("shift-enter", SecondaryConfirm, Some("Launcher")),
         KeyBinding::new("up", CursorUp, Some("Launcher")),
         KeyBinding::new("down", CursorDown, Some("Launcher")),
         KeyBinding::new("pageup", PageUp, Some("Launcher")),
