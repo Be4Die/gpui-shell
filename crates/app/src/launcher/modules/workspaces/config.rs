@@ -1,8 +1,8 @@
-//! Workspaces view configuration.
+//! Workspaces module configuration.
 
 use serde::{Deserialize, Serialize};
 
-/// Workspaces view configuration.
+/// Workspaces module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WorkspacesConfig {

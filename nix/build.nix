@@ -7,6 +7,7 @@
 
   makeWrapper,
   matugen,
+  wl-clipboard,
 
   freetype,
   fontconfig,
@@ -38,7 +39,6 @@ let
       relPath = lib.removePrefix root path;
       topLevelInclueds = [
         "crates"
-        "assets"
         "Cargo.toml"
       ];
       firstComp = builtins.head (lib.path.subpath.components relPath);
@@ -148,6 +148,15 @@ in
 craneLib.buildPackage (
   lib.recursiveUpdate commonArgs {
     inherit cargoArtifacts;
+
+    # Wallpaper theming shells out to matugen and clipboard history to
+    # wl-clipboard; the installed shell runs outside the dev shell, so put
+    # them on PATH. Not in commonArgs: the deps-only build has no binary to
+    # wrap.
+    postInstall = ''
+      wrapProgram $out/bin/${pname} \
+        --prefix PATH : ${lib.makeBinPath [ matugen wl-clipboard ]}
+    '';
 
     meta = {
       mainProgram = pname;

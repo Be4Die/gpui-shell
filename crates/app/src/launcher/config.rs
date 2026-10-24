@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::modules::{
-    apps::config::AppsConfig, help::config::HelpConfig, services::config::ServicesConfig,
+    apps::config::AppsConfig, calculator::config::CalculatorConfig,
+    clipboard::config::ClipboardConfig, help::config::HelpConfig, services::config::ServicesConfig,
     shell::config::ShellConfig, theme::config::ThemesConfig, wallpaper::config::WallpaperConfig,
     web::config::WebConfig, workspaces::config::WorkspacesConfig,
 };
@@ -16,6 +17,8 @@ pub struct LauncherConfig {
     pub margin_right: f32,
     pub margin_bottom: f32,
     pub margin_left: f32,
+    /// Per-module settings, `[launcher.modules.<id>]`.
+    #[serde(alias = "views")]
     pub modules: ModulesConfig,
 }
 
@@ -33,7 +36,7 @@ impl Default for LauncherConfig {
     }
 }
 
-/// Configuration for launcher modules/views.
+/// Configuration for launcher modules.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModulesConfig {
@@ -44,5 +47,7 @@ pub struct ModulesConfig {
     pub wallpaper: WallpaperConfig,
     pub themes: ThemesConfig,
     pub services: ServicesConfig,
+    pub calculator: CalculatorConfig,
+    pub clipboard: ClipboardConfig,
     pub help: HelpConfig,
 }

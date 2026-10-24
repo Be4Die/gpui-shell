@@ -46,7 +46,7 @@ export default defineConfig({
               label: 'Extending (unstable)',
               items: [
                 { label: 'Adding a bar module', slug: 'developer/unstable/bar-module' },
-                { label: 'Adding a launcher view', slug: 'developer/unstable/launcher-view' },
+                { label: 'Adding a launcher module', slug: 'developer/unstable/launcher-module' },
               ],
             },
             {

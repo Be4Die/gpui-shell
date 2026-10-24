@@ -3,6 +3,7 @@
 //! This module provides integration with the Hyprland compositor via its IPC socket.
 //! Uses incremental updates with direct Mutable mutation for efficiency.
 
+use crate::lifecycle::RunToken;
 use anyhow::Result;
 use futures_signals::signal::Mutable;
 use hyprland::{
@@ -14,8 +15,7 @@ use hyprland::{
     prelude::*,
 };
 use itertools::Itertools;
-use std::thread;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 use super::types::{ActiveWindow, CompositorCommand, CompositorState, Monitor, Workspace};
 
@@ -41,6 +41,8 @@ fn map_client(c: Client, monitors: &[super::types::Monitor]) -> super::types::Wi
         workspace_id: c.workspace.id,
         is_focused: false,
         is_minimized: false,
+        is_urgent: false,
+        pid: u32::try_from(c.pid).ok(),
         geometry: Some(super::types::WindowGeometry {
             x: c.at.0 as i32,
             y: c.at.1 as i32,
@@ -58,14 +60,32 @@ fn refresh_windows(state: &mut super::types::CompositorState) {
     if let Ok(clients) = Clients::get() {
         let monitors = state.monitors.clone();
         let focused_address = state.active_window.as_ref().map(|w| w.address.clone());
+        // Clients carry no urgency, so keep what the `urgent` events set.
+        let urgent: Vec<String> = state
+            .windows
+            .iter()
+            .filter(|w| w.is_urgent)
+            .map(|w| w.id.clone())
+            .collect();
         state.windows = clients
             .into_iter()
             .map(|c| {
                 let mut w = map_client(c, &monitors);
                 w.is_focused = Some(&w.id) == focused_address.as_ref();
+                w.is_urgent = !w.is_focused && urgent.contains(&w.id);
                 w
             })
             .collect();
+        sync_urgent_workspaces(state);
+    }
+}
+
+fn sync_urgent_workspaces(state: &mut super::types::CompositorState) {
+    for ws in state.workspaces.iter_mut() {
+        ws.has_urgent = state
+            .windows
+            .iter()
+            .any(|w| w.is_urgent && w.workspace_id == ws.id);
     }
 }
 
@@ -126,6 +146,7 @@ pub fn fetch_full_state() -> Result<CompositorState> {
             monitor_id: w.monitor_id,
             windows: w.windows,
             is_special: w.id < 0,
+            has_urgent: false,
         })
         .collect();
 
@@ -178,13 +199,17 @@ pub fn fetch_full_state() -> Result<CompositorState> {
     })
 }
 
-/// Start the Hyprland event listener in a dedicated thread.
-/// Uses sync EventListener with direct Mutable mutation for efficiency.
-pub fn start_listener(data: Mutable<CompositorState>) {
-    thread::spawn(move || {
-        if let Err(e) = run_listener(data) {
-            error!("Hyprland event listener error: {}", e);
+/// Follow Hyprland's event socket on a dedicated thread. The socket closing
+/// fails the attempt, and the retry refetches whatever it missed.
+pub fn start_listener(data: Mutable<CompositorState>, token: RunToken) {
+    let mut resync = false;
+    token.supervise_blocking("Hyprland", move |token| {
+        if std::mem::replace(&mut resync, true) {
+            data.set_neq(fetch_full_state()?);
         }
+        token.active();
+        run_listener(data.clone())?;
+        anyhow::bail!("Hyprland event socket closed")
     });
 }
 
@@ -220,6 +245,7 @@ fn run_listener(data: Mutable<CompositorState>) -> Result<()> {
                     monitor_id: None,
                     windows: 0,
                     is_special: evt.id < 0,
+                    has_urgent: false,
                 });
                 state.workspaces.sort_by_key(|w| w.id);
             }
@@ -257,12 +283,33 @@ fn run_listener(data: Mutable<CompositorState>) -> Result<()> {
             let focused_address = evt.as_ref().map(|w| w.address.to_string());
             for w in state.windows.iter_mut() {
                 w.is_focused = Some(&w.id) == focused_address.as_ref();
+                // Hyprland clears urgency once the window is focused.
+                w.is_urgent &= !w.is_focused;
             }
+            sync_urgent_workspaces(&mut state);
             state.active_window = evt.map(|w| ActiveWindow {
                 title: w.title,
                 class: w.class,
                 address: w.address.to_string(),
             });
+        });
+    }
+
+    // Window asked for attention
+    {
+        let data = data.clone();
+        listener.add_urgent_state_changed_handler(move |address| {
+            debug!("Urgent window: {}", address);
+            let address = address.to_string();
+            let mut state = data.lock_mut();
+            if let Some(w) = state
+                .windows
+                .iter_mut()
+                .find(|w| w.id == address && !w.is_focused)
+            {
+                w.is_urgent = true;
+            }
+            sync_urgent_workspaces(&mut state);
         });
     }
 

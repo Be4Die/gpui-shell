@@ -1,8 +1,8 @@
-//! Help view configuration.
+//! Help module configuration.
 
 use serde::{Deserialize, Serialize};
 
-/// Help view configuration.
+/// Help module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HelpConfig {

@@ -1,8 +1,8 @@
-//! Apps view configuration.
+//! Apps module configuration.
 
 use serde::{Deserialize, Serialize};
 
-/// Apps view configuration.
+/// Apps module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppsConfig {

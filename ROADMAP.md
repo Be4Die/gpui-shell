@@ -53,9 +53,9 @@ _Goal: make outside contributions safe and pleasant before asking for them._
       architecture page with a hand-drawn diagram.
 - [x] Temporary guides for the current Rust API:
       [adding a bar module](docs/src/content/docs/developer/unstable/bar-module.md)
-      and [adding a launcher view](docs/src/content/docs/developer/unstable/launcher-view.md).
+      and [adding a launcher module](docs/src/content/docs/developer/unstable/launcher-module.md).
       They get rewritten once the module APIs settle (v0.4).
-- [ ] Issue templates: add a "compositor + version" field to the bug report.
+- [x] Issue templates: add a "compositor + version" field to the bug report.
 
 ## v0.3: Reliability
 
@@ -63,12 +63,12 @@ _Goal: the shell runs for days without a restart._
 
 Services lifecycle (do these in order):
 
-- [ ] Service cancellation: stop/restart actually stops the old run. Today a
+- [x] Service cancellation: stop/restart actually stops the old run. Today a
       quiet bus parks the listener forever, which leaks a thread and runtime
       on every restart, and stale listeners can still write data.
 - [ ] Service supervision: retry with backoff instead of dying on the first
       error, replacing the hand-rolled retry loops in tray/mpris.
-- [ ] Command dispatch through a per-service job queue instead of a mix of
+- [x] Command dispatch through a per-service job queue instead of a mix of
       inline calls, foreground `cx.spawn` and a thread per command.
 - [ ] Compositor as a managed service, with a `RunToken` and a supervised
       reconnect after a compositor reload kills the IPC socket.
@@ -98,18 +98,18 @@ Module APIs. The design discussion is open now, and the code lands here:
       per-module config tables, the monitor a module is on, and a shape a
       post-1.0 plugin system (Lua, TypeScript or Rust, to be decided) can
       target unchanged.
-- [ ] Launcher view API, with the same goals, plus `&mut self`, a real
-      `Context` and async matching, so stateful views drop their
+- [ ] Launcher module API, with the same goals, plus `&mut self`, a real
+      `Context` and async matching, so stateful modules drop their
       interior-mutability workarounds and click and Enter take the same
       path.
-- [ ] Port the built-in bar modules and launcher views to the new APIs.
-- [ ] Rewrite the "Adding a bar module" and "Adding a launcher view" guides
+- [ ] Port the built-in bar modules and launcher modules to the new APIs.
+- [ ] Rewrite the "Adding a bar module" and "Adding a launcher module" guides
       against the new APIs, and move them out of `developer/unstable/`.
 
 Launcher quality:
 
 - [ ] Fuzzy matching with ranking and match highlighting (e.g. port or use Zed's
-      `fuzzy` crate) to replace per-view `contains` filters.
+      `fuzzy` crate) to replace per-module `contains` filters.
 - [ ] Render path: `uniform_list` instead of measure-all, and parse the
       query once per change instead of once per row.
 - [ ] Unify the launcher and panel window registries so only one surface is
@@ -121,7 +121,7 @@ Input:
       instead of copied across the launcher, control center and dock picker.
 - [ ] User-configurable keybindings in `config.toml`.
 
-New launcher views, written against the new API (propose yours):
+New launcher modules, written against the new API (propose yours):
 
 - [ ] Calculator, clipboard history, emoji picker, power/session menu.
 
@@ -135,7 +135,7 @@ Code health (each item independent):
       instead of five.
 - [ ] Split hot fields (network throughput, sysinfo) out of whole-struct
       signals so they stop re-rendering every subscriber.
-- [ ] Shared `ui::patterns::LauncherRow` and merged shell/web views, which
+- [ ] Shared `ui::patterns::LauncherRow` and merged shell/web modules, which
       are near line-for-line copies today.
 - [ ] Rethink `memory_bytes()`. The hand-written size arithmetic in 12
       services drifts silently.
@@ -143,7 +143,7 @@ Code health (each item independent):
 Parity & UX:
 
 - [ ] Compositor feature matrix in the docs (Hyprland / Niri / Mango × every
-      bar module and launcher view), with gaps filed as issues.
+      bar module and launcher module), with gaps filed as issues.
 - [ ] Multi-monitor audit: bar, OSD, notifications and dock on hotplug and
       scale changes.
 - [ ] Accessibility pass: keyboard reachability of every control-center
@@ -155,7 +155,7 @@ Parity & UX:
 
 _Goal: change settings without opening an editor._
 
-- [ ] Config view: browse and change settings (bar layout, modules,
+- [ ] Config module: browse and change settings (bar layout, modules,
       launcher, services) from the launcher instead of editing
       `config.toml` by hand. The shell never writes `config.toml`, so this
       needs a decision on where changes go: `state.toml` overrides, or
@@ -188,8 +188,8 @@ _Goal: freeze the surface and get it in front of as many users as possible._
 
 Ideas we're interested in but won't block 1.0 on. Discussion welcome:
 
-- Plugin or scripting API for third-party bar modules and launcher views,
-  built on the bar module and launcher view APIs from v0.4
+- Plugin or scripting API for third-party bar modules and launcher modules,
+  built on the bar module and launcher module APIs from v0.4
 - Lock screen and idle integration
 - More compositors (Sway, river)
 - Theme sharing / importing from other ecosystems (base16, matugen)

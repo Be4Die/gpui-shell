@@ -27,7 +27,7 @@ margin_top = 150.0
 
 ## Launcher Modules
 
-The launcher supports pluggable modules accessed via command prefixes. Each module can be configured in the `[launcher.modules.<module_name>]` section.
+The launcher is made of modules, each opened by a command prefix. Each module is configured in its `[launcher.modules.<module>]` section (`[launcher.views.<module>]` still works).
 
 ### Wallpaper Module
 
@@ -39,6 +39,11 @@ Browse and apply wallpapers from a directory. Optionally generates a color schem
 | ------------------------- | -------- | ---------------------- | --------------------------------------------- |
 | `prefix`                  | `string` | `";wp"`               | Command prefix to invoke the wallpaper module. |
 | `directory`               | `string` | `"~/Pictures/Wallpapers"` | Directory containing wallpaper images.        |
+| `columns`                 | `integer` | `3`                   | Thumbnail cards per grid row.                 |
+| `matugen`                 | `bool`   | `true`                 | After a wallpaper is applied, generate dark and light themes from it in the background and offer them above the grid. Nothing is applied until you pick one. |
+| `matugen_scheme`          | `string` | `"scheme-tonal-spot"`  | matugen `--type` to generate with.            |
+
+Thumbnails are decoded once and cached in `$XDG_CACHE_HOME/gpuishell/thumbs/`.
 
 #### Example
 
@@ -78,13 +83,14 @@ The launcher supports vim-style navigation via Ctrl key combinations alongside s
 | `Page Up`        | `Ctrl+U`              | Page up         |
 | `Page Down`      | `Ctrl+D`              | Page down       |
 | `Enter`          |                        | Confirm / Run   |
+| `Shift+Enter`    |                        | Second action (e.g. run a shell command in the background) |
 | `Escape`         |                        | Clear / Close   |
 
 ### Editing
 
 | Key                | Ctrl Alternative       | Action              |
 | ------------------ | ---------------------- | ------------------- |
-| `Left`             | `Ctrl+H`              | Move cursor left    |
+| `Left`             | `Ctrl+H`              | Move cursor left (in a grid such as `;wp`, move the selection) |
 | `Right`            | `Ctrl+L` / `Ctrl+F`   | Move cursor right   |
 | `Ctrl+Left`        | `Ctrl+B`              | Move word left      |
 | `Ctrl+Right`       | `Ctrl+W`              | Move word right     |

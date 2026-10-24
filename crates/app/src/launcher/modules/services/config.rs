@@ -1,4 +1,4 @@
-//! Configuration for services status view.
+//! Configuration for services status module.
 
 use serde::{Deserialize, Serialize};
 

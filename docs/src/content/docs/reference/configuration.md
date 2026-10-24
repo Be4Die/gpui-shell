@@ -34,7 +34,7 @@ position = "right"
 [dock]
 position = "bottom"
 monitors = "primaryonly"
-visibility = "always-visible"
+visibility = "intelligent-hide"
 hover_effect = "lift"
 icon_size = 40.0
 pinned = ["firefox.desktop"]
@@ -53,7 +53,7 @@ The `[dock]` section configures the pinned and running application dock.
 [dock]
 position = "bottom"       # "top", "bottom", "left", or "right"
 monitors = "primaryonly"  # "primaryonly" or "all"
-visibility = "always-visible"
+visibility = "intelligent-hide"
 hover_effect = "lift"     # "none", "lift", "magnify", "glow", or "magnify-lift"
 icon_size = 40.0
 pinned = ["firefox.desktop"]
@@ -62,8 +62,8 @@ pinned = ["firefox.desktop"]
 `visibility` accepts:
 
 - `"always-visible"`: the dock never hides.
-- `"intelligent-hide"`: the dock hides when focus leaves its monitor and reappears at its edge.
-- `"dodge-windows"`: the dock hides when the focused window overlaps it. On compositors without window geometry, it uses intelligent-hide behavior instead.
+- `"intelligent-hide"` (default): the dock hides when focus leaves its monitor and reappears at its edge.
+- `"dodge-windows"`: the dock hides only while a window on its monitor's current workspace covers it, and comes back when the pointer reaches its edge or nothing is in the way. On compositors without window geometry (Niri), any window on that workspace counts as covering it.
 
 See the individual reference pages for details on each section:
 

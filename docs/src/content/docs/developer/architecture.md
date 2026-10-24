@@ -34,12 +34,16 @@ Every service works the same way (the strip at the bottom of the diagram):
 
 - **Read:** `AppState::audio(cx).subscribe()`, passed to `state::watch`, which
   updates the widget and calls `cx.notify()`. Use `.get()` for a one-off read.
-- **Write:** widgets call `dispatch(Command)`, never mutate state. The result
-  comes back through the same signal.
+- **Write:** widgets call `dispatch(Command)`, never mutate state. It queues
+  the command on the service's `JobQueue` (`services/src/jobs.rs`), whose
+  worker runs commands one at a time; the result comes back through the same
+  signal. `request(Command)` awaits the outcome instead, and the queue's
+  in-flight list drives progress indicators.
 - **Lifecycle:** `ManagedService` (`services/src/lifecycle.rs`). Each
-  `start()` gets a fresh `RunToken`, and listeners exit once
-  `token.alive()` is false. Startup mode per service is `eager`, `lazy` or
-  `off` (`[services]` in config), and the `;s` launcher view controls them
+  `start()` gets a fresh `RunToken`; the run, and its command worker, end
+  the moment it is stopped or restarted (`token.run_until_cancelled`), not at
+  the next event. Startup mode per service is `eager`, `lazy` or
+  `off` (`[services]` in config), and the `;s` launcher module controls them
   at runtime.
 
 The compositor is the exception: it connects at startup, can't be stopped,
@@ -62,7 +66,7 @@ Windows are matched to compositor monitors by output name
 ## Config and IPC
 
 - The shell never writes `config.toml`. What it persists goes to
-  `state.toml`, which overrides config. The theme view also saves
+  `state.toml`, which overrides config. The theme module also saves
   `theme.toml`.
 - Both files hot-reload. A broken file keeps the last good value and raises a
   notification, and `gpuishell --validate` shows the error.
@@ -73,8 +77,8 @@ Windows are matched to compositor monitors by output name
 
 - **Bar module:** a directory in `app/src/bar/modules/`, registered in
   `modules/registry.rs`.
-- **Launcher view:** implement `LauncherView` in `app/src/launcher/modules/`
-  with a unique `prefix()`.
+- **Launcher module:** a directory in `app/src/launcher/modules/` implementing
+  `LauncherPage`, registered in `modules/mod.rs`.
 - **Service:** a module in `services/src/` implementing `ManagedService`,
   registered in `app/src/state.rs` and the `[services]` config.
 - **Component or pattern:** in `crates/ui`, with a story in `crates/story`.

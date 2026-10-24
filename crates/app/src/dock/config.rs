@@ -20,15 +20,17 @@ pub enum DockMonitors {
 #[serde(rename_all = "kebab-case")]
 pub enum DockVisibility {
     /// Never hides.
-    #[default]
     AlwaysVisible,
     /// Hides after a short delay once no window on the dock's monitor is
     /// focused; reveals on pointer-enter at the dock's edge, or as soon as
     /// focus returns to this monitor.
+    #[default]
     IntelligentHide,
-    /// Hides only when the focused window's bounds geometrically overlap
-    /// the dock's own bounds. Falls back to `IntelligentHide`'s behavior
-    /// when the focused window has no reported geometry (e.g. on Niri).
+    /// Hides only while a window on the dock's monitor's current workspace
+    /// covers the dock; comes back when the pointer reaches the dock's edge
+    /// or nothing is in the way anymore. On compositors that report no
+    /// window geometry (Niri), any window on that workspace counts as
+    /// covering it.
     DodgeWindows,
 }
 
@@ -50,7 +52,7 @@ pub enum DockHoverEffect {
 }
 
 /// Dock configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockConfig {
     /// Screen edge the dock is anchored to. Independent of `bar.position`.
@@ -83,12 +85,21 @@ impl Default for DockConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{DockConfig, DockHoverEffect};
+    use super::{DockConfig, DockHoverEffect, DockVisibility};
 
     #[test]
     fn hover_effect_deserializes_magnify_lift_from_kebab_case() {
         let config: DockConfig = toml::from_str("hover_effect = \"magnify-lift\"").unwrap();
 
         assert_eq!(config.hover_effect, DockHoverEffect::MagnifyLift);
+    }
+
+    #[test]
+    fn visibility_defaults_to_intelligent_hide() {
+        let config: DockConfig = toml::from_str("").unwrap();
+
+        assert_eq!(config.visibility, DockVisibility::IntelligentHide);
+        let explicit: DockConfig = toml::from_str("visibility = \"always-visible\"").unwrap();
+        assert_eq!(explicit.visibility, DockVisibility::AlwaysVisible);
     }
 }
