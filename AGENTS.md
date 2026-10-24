@@ -55,9 +55,11 @@ Each one implements `ManagedService` (`crates/services/src/lifecycle.rs`): a
 `Lifecycle` owns its status and a run generation, `start()` (re)runs the
 listener with a fresh `RunToken`, and a stop or restart must retire the old
 run at once, not at its next event. Async listeners run on the shared tokio
-runtime inside `token.run_until_cancelled(..)` (never a thread with its own
-runtime); blocking ones (PulseAudio, PipeWire, udev) wake on
-`token.cancelled()` and write through `token.write`. Commands go through the
+runtime through `token.supervise(name, |token| run(..))` (never a thread with
+its own runtime): one attempt returns `Err` on any failure and never retries
+on its own; the supervisor backs off and runs it again. Blocking ones
+(PulseAudio, PipeWire, udev) wake on `token.cancelled()` and write through
+`token.write`. Commands go through the
 service's `JobQueue` (`crates/services/src/jobs.rs`): `dispatch` queues, one
 worker per run executes them in order, and `request` awaits a result. UI code
 never `cx.spawn`s a command or blocks on one. Startup mode per service lives in

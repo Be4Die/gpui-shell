@@ -12,9 +12,15 @@
 //! stream does not have to wait for its next event to notice: wrapping the
 //! run in [`RunToken::run_until_cancelled`] drops it the moment the
 //! generation moves on.
+//!
+//! A listener does not retry on its own. It returns `Err` and
+//! [`RunToken::supervise`] runs it again after a [`Backoff`] delay, so every
+//! service recovers from a bus hiccup the same way and shows the same status
+//! while it waits.
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_signals::signal::{Mutable, MutableSignalCloned};
 use serde::{Deserialize, Serialize};
@@ -141,6 +147,71 @@ impl Default for Lifecycle {
     }
 }
 
+/// Delay before the next attempt after a failed run: doubles from a second
+/// up to a minute, and starts over once a run has stayed up for a while.
+#[derive(Debug)]
+pub struct Backoff {
+    next: Duration,
+}
+
+impl Backoff {
+    pub const BASE: Duration = Duration::from_secs(1);
+    pub const MAX: Duration = Duration::from_secs(60);
+    /// A run that lasted this long was healthy, so its failure is a new one.
+    pub const HEALTHY: Duration = Duration::from_secs(30);
+
+    pub fn new() -> Self {
+        Self { next: Self::BASE }
+    }
+
+    /// The delay to wait now, after a run that lasted `ran_for`.
+    pub fn delay(&mut self, ran_for: Duration) -> Duration {
+        if ran_for >= Self::HEALTHY {
+            self.next = Self::BASE;
+        }
+        let delay = self.next;
+        self.next = (self.next * 2).min(Self::MAX);
+        delay
+    }
+}
+
+impl Default for Backoff {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Drive `attempt` on the tokio runtime until it is cancelled or finishes
+/// with `Ok`, starting it again after a [`Backoff`] delay each time it fails.
+/// The listener only reports its failure by returning it; status, logging
+/// and the wait live here. Both are cut short by a stop or restart.
+async fn supervise<F, Fut>(token: RunToken, name: &'static str, attempt: F)
+where
+    F: Fn(RunToken) -> Fut,
+    Fut: Future<Output = anyhow::Result<()>>,
+{
+    let mut backoff = Backoff::new();
+    loop {
+        let started = tokio::time::Instant::now();
+        let err = match token.run_until_cancelled(attempt(token.clone())).await {
+            None | Some(Ok(())) => return,
+            Some(Err(err)) => err,
+        };
+
+        let delay = backoff.delay(started.elapsed());
+        tracing::warn!("{name} failed, retrying in {delay:?}: {err:#}");
+        token.error(err.to_string());
+        if token
+            .run_until_cancelled(tokio::time::sleep(delay))
+            .await
+            .is_none()
+        {
+            return;
+        }
+        token.set(ServiceStatus::Initializing);
+    }
+}
+
 /// Handle held by a running listener.
 ///
 /// Writes through a stale token are dropped, so a listener that only notices
@@ -178,6 +249,19 @@ impl RunToken {
             _ = self.cancelled() => None,
             output = fut => Some(output),
         }
+    }
+
+    /// Run `attempt` as this run's listener, retrying it with backoff
+    /// whenever it returns `Err`. See [`supervise`].
+    ///
+    /// Call from `ManagedService::start` with the new run's token; `name`
+    /// labels the retry in the log.
+    pub fn supervise<F, Fut>(self, name: &'static str, attempt: F)
+    where
+        F: Fn(RunToken) -> Fut + Send + 'static,
+        Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        tokio::spawn(supervise(self, name, attempt));
     }
 
     /// Mutate `data` only while this run is current.
@@ -330,5 +414,78 @@ mod tests {
 
         second.write(&data, |v| *v = 3);
         assert_eq!(data.get(), 3);
+    }
+
+    #[test]
+    fn backoff_doubles_to_the_cap_and_resets_after_a_healthy_run() {
+        let mut backoff = Backoff::new();
+        let instant = Duration::ZERO;
+
+        let delays: Vec<_> = (0..8).map(|_| backoff.delay(instant).as_secs()).collect();
+        assert_eq!(delays, [1, 2, 4, 8, 16, 32, 60, 60]);
+
+        assert_eq!(backoff.delay(Backoff::HEALTHY).as_secs(), 1);
+        assert_eq!(backoff.delay(instant).as_secs(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failing_listener_is_retried_until_it_succeeds() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let lifecycle = Lifecycle::new(ServiceMode::Eager);
+        let token = lifecycle.begin();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let started = tokio::time::Instant::now();
+
+        supervise(token, "test", {
+            let attempts = attempts.clone();
+            move |token| {
+                let attempts = attempts.clone();
+                async move {
+                    match attempts.fetch_add(1, Ordering::SeqCst) {
+                        n if n < 3 => anyhow::bail!("attempt {n} failed"),
+                        _ => {
+                            token.active();
+                            Ok(())
+                        }
+                    }
+                }
+            }
+        })
+        .await;
+
+        // Three failures cost 1s + 2s + 4s before the fourth attempt.
+        assert_eq!(attempts.load(Ordering::SeqCst), 4);
+        assert_eq!(started.elapsed(), Duration::from_secs(7));
+        assert_eq!(lifecycle.status(), ServiceStatus::Active);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_ends_supervision_instead_of_a_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let lifecycle = Lifecycle::new(ServiceMode::Eager);
+        let token = lifecycle.begin();
+        let attempts = Arc::new(AtomicUsize::new(0));
+
+        supervise(token, "test", {
+            let attempts = attempts.clone();
+            let lifecycle = lifecycle.clone();
+            move |_token| {
+                let attempts = attempts.clone();
+                let lifecycle = lifecycle.clone();
+                async move {
+                    // The user stops the service while its second attempt fails.
+                    if attempts.fetch_add(1, Ordering::SeqCst) == 1 {
+                        lifecycle.stop();
+                    }
+                    anyhow::bail!("down")
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(lifecycle.status(), ServiceStatus::Stopped);
     }
 }

@@ -8,15 +8,15 @@ mod dbus;
 pub use dbus::{MenuLayout, MenuLayoutProps};
 
 use std::sync::Arc;
-use std::time::Duration;
 
+use anyhow::Context;
 use dbus::{
     DBusMenuProxy, StatusNotifierItemProxy, StatusNotifierWatcher, StatusNotifierWatcherProxy,
 };
 use futures_signals::signal::{Mutable, MutableSignalCloned};
 use futures_util::StreamExt;
 use futures_util::stream::select_all;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use zbus::proxy::CacheProperties;
 
 use crate::jobs::JobQueue;
@@ -453,43 +453,25 @@ impl ManagedService for TraySubscriber {
             async move { subscriber.execute(command).await }
         });
 
-        tokio::spawn(async move {
-            token.run_until_cancelled(run(data, &token)).await;
-        });
+        token.supervise(self.name(), move |token| run(data.clone(), token));
     }
 }
 
-/// One run: serve the watcher, snapshot, then follow item changes.
-async fn run(data: Mutable<TrayData>, token: &RunToken) {
-    let conn = match StatusNotifierWatcher::start_server(token).await {
-        Ok(conn) => conn,
-        Err(e) => {
-            error!("Failed to start the StatusNotifierWatcher server: {}", e);
-            token.error(e.to_string());
-            return;
-        }
-    };
+/// One attempt: serve the watcher, snapshot, then follow item changes. Ends
+/// only with an error, which the supervisor answers with a fresh attempt.
+async fn run(data: Mutable<TrayData>, token: RunToken) -> anyhow::Result<()> {
+    let server = StatusNotifierWatcher::start_server()
+        .await
+        .context("starting the StatusNotifierWatcher server")?;
 
-    match fetch_tray_data(&conn).await {
-        Ok(fetched) => {
-            info!("Tray service started with {} items", fetched.items.len());
-            data.set(fetched);
-            token.active();
-        }
-        Err(e) => {
-            error!("Failed to fetch initial tray data: {}", e);
-            token.error(e.to_string());
-        }
-    }
+    let fetched = fetch_tray_data(&server.connection)
+        .await
+        .context("fetching tray items")?;
+    info!("Tray service started with {} items", fetched.items.len());
+    data.set(fetched);
+    token.active();
 
-    // ponytail: Phase 2 (supervision) replaces this hand-rolled retry.
-    loop {
-        if let Err(e) = run_listener(&data, &conn).await {
-            error!("Tray listener error: {}", e);
-            token.error(e.to_string());
-        }
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
+    run_listener(&data, &server.connection).await
 }
 
 /// Retained size of a menu layout, including its submenus.
@@ -666,8 +648,8 @@ async fn run_listener(data: &Mutable<TrayData>, conn: &zbus::Connection) -> anyh
         events.push(stream);
     }
 
-    // Process events until stream ends (which shouldn't happen normally)
+    // The streams end only when the bus goes away; resubscribing is the fix.
     while events.next().await.is_some() {}
 
-    Ok(())
+    anyhow::bail!("tray event streams ended")
 }
