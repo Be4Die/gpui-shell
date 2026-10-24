@@ -51,15 +51,15 @@ impl<'a> NetworkManager<'a> {
         let mut info = Vec::with_capacity(ac_proxies.len());
 
         for connection in ac_proxies {
-            for device in connection.devices().await.unwrap_or_default() {
-                if connection.vpn().await.unwrap_or_default() {
-                    info.push(ActiveConnectionInfo::Vpn {
-                        name: connection.id().await?,
-                        object_path: connection.inner().path().to_owned().into(),
-                    });
-                    continue;
-                }
+            let name = connection.id().await?;
+            let object_path = connection.inner().path().to_owned().into();
 
+            if connection.vpn().await.unwrap_or_default() {
+                info.push(ActiveConnectionInfo::Vpn { name, object_path });
+                continue;
+            }
+
+            for device in connection.devices().await.unwrap_or_default() {
                 let device_proxy = DeviceProxy::builder(self.inner().connection())
                     .path(device)?
                     .build()
@@ -73,7 +73,7 @@ impl<'a> NetworkManager<'a> {
                             .await?;
 
                         info.push(ActiveConnectionInfo::Wired {
-                            name: connection.id().await?,
+                            name: name.clone(),
                             speed: wired_device.speed().await?,
                         });
                     }
@@ -91,18 +91,18 @@ impl<'a> NetworkManager<'a> {
                                 .await?;
 
                             info.push(ActiveConnectionInfo::WiFi {
-                                id: connection.id().await?,
+                                id: name.clone(),
                                 name: String::from_utf8_lossy(&ap_proxy.ssid().await?).into_owned(),
                                 strength: ap_proxy.strength().await.unwrap_or_default(),
                                 device: device_proxy.inner().path().to_string(),
-                                object_path: connection.inner().path().to_owned().into(),
+                                object_path: object_path.clone(),
                             });
                         }
                     }
                     Some(DeviceType::WireGuard) => {
                         info.push(ActiveConnectionInfo::Vpn {
-                            name: connection.id().await?,
-                            object_path: connection.inner().path().to_owned().into(),
+                            name: name.clone(),
+                            object_path: object_path.clone(),
                         });
                     }
                     _ => {}
@@ -113,11 +113,13 @@ impl<'a> NetworkManager<'a> {
         // Sort: VPN first, then Wired, then WiFi
         info.sort_by(|a, b| {
             let priority = |conn: &ActiveConnectionInfo| match conn {
-                ActiveConnectionInfo::Vpn { name, .. } => format!("0{name}"),
-                ActiveConnectionInfo::Wired { name, .. } => format!("1{name}"),
-                ActiveConnectionInfo::WiFi { name, .. } => format!("2{name}"),
+                ActiveConnectionInfo::Vpn { .. } => 0,
+                ActiveConnectionInfo::Wired { .. } => 1,
+                ActiveConnectionInfo::WiFi { .. } => 2,
             };
-            priority(a).cmp(&priority(b))
+            priority(a)
+                .cmp(&priority(b))
+                .then_with(|| a.name().cmp(b.name()))
         });
 
         Ok(info)
