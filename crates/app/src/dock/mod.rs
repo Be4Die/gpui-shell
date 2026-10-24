@@ -170,6 +170,7 @@ pub(super) struct Dock {
     cycle_index: HashMap<String, usize>,
     revealed: bool,
     hidden_by_rule: bool,
+    pointer_inside: bool,
     /// A rehide timer is waiting for the dock's menu to close.
     menu_hold: bool,
     reveal_generation: u64,
@@ -192,6 +193,7 @@ impl Dock {
             cycle_index: HashMap::new(),
             revealed: true,
             hidden_by_rule: false,
+            pointer_inside: false,
             menu_hold: false,
             reveal_generation: 0,
             hide_generation: 0,
@@ -275,6 +277,10 @@ impl Dock {
                 if this.reveal_generation != generation {
                     return;
                 }
+                if this.pointer_inside {
+                    this.menu_hold = false;
+                    return;
+                }
                 if dock_menu_is_open(cx) {
                     this.schedule_rehide(cx);
                     return;
@@ -298,6 +304,9 @@ impl Dock {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.hide_generation != generation {
+                    return;
+                }
+                if this.pointer_inside {
                     return;
                 }
                 if dock_menu_is_open(cx) {
@@ -383,14 +392,24 @@ impl Dock {
             }
         };
 
-        let is_focused = item.windows.iter().any(|window| window.is_focused);
         let window_count = item.windows.len();
-        let bar_color = if is_focused {
-            accent
-        } else {
-            theme.colors.text_muted
-        };
-        let bar_width = if window_count > 1 { 20.0 } else { 6.0 };
+        let indicator_width = if window_count > 1 { 20.0 } else { 6.0 };
+        let inactive_indicator = theme.colors.text_muted;
+        let indicators = item
+            .windows
+            .iter()
+            .map(|window| {
+                div()
+                    .flex_1()
+                    .h(px(3.0))
+                    .rounded(px(1.5))
+                    .bg(if window.is_focused {
+                        accent
+                    } else {
+                        inactive_indicator
+                    })
+            })
+            .collect::<Vec<_>>();
 
         let icon_element = element
             .when_some(item.icon_path.clone(), |element, path| {
@@ -402,25 +421,6 @@ impl Dock {
                         .text_size(TextSize::Medium.rems())
                         .text_color(theme.colors.text)
                         .child(item.name.chars().take(1).collect::<String>()),
-                )
-            })
-            .when(window_count > 1, |element| {
-                element.child(
-                    div()
-                        .absolute()
-                        .top(px(-2.0))
-                        .right(px(-2.0))
-                        .min_w(px(14.0))
-                        .h(px(14.0))
-                        .px(px(3.0))
-                        .rounded(px(7.0))
-                        .bg(accent)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(TextSize::XSmall.rems())
-                        .text_color(theme.colors.background)
-                        .child(window_count.to_string()),
                 )
             });
 
@@ -495,10 +495,11 @@ impl Dock {
             .when(item.is_running(), |element| {
                 element.child(
                     div()
-                        .w(px(bar_width))
+                        .w(px(indicator_width))
                         .h(px(3.0))
-                        .rounded(px(1.5))
-                        .bg(bar_color),
+                        .flex()
+                        .gap(px(2.0))
+                        .children(indicators),
                 )
             })
             .into_any_element()
@@ -536,6 +537,10 @@ impl Render for Dock {
         }
         self.hidden_by_rule = is_hidden_by_rule;
 
+        if self.pointer_inside {
+            self.revealed = true;
+        }
+
         // Stay revealed while a dock menu is open; the timer re-arms until it closes.
         if dock_menu_is_open(cx) {
             self.revealed = true;
@@ -555,8 +560,10 @@ impl Render for Dock {
                 .w(strip_size.width)
                 .h(strip_size.height)
                 .on_mouse_move(cx.listener(|this, _event, _window, cx| {
+                    this.pointer_inside = true;
+                    this.hide_generation += 1;
+                    this.reveal_generation += 1;
                     this.revealed = true;
-                    this.schedule_rehide(cx);
                     cx.notify();
                 }))
                 .into_any_element();
@@ -586,8 +593,12 @@ impl Render for Dock {
             .bg(background)
             .border_1()
             .border_color(border)
-            .on_mouse_move(cx.listener(|this, _event, _window, cx| {
-                if this.hidden_by_rule {
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                this.pointer_inside = *hovered;
+                if *hovered {
+                    this.hide_generation += 1;
+                    this.reveal_generation += 1;
+                } else if this.hidden_by_rule {
                     this.schedule_rehide(cx);
                 }
             }))

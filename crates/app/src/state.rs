@@ -151,7 +151,7 @@ pub(crate) async fn init_services() -> anyhow::Result<Services> {
     })
 }
 
-/// Watch a signal and apply updates to component state.
+/// Watch a signal and apply distinct consecutive updates to component state.
 pub(crate) fn watch<C, S, T, F>(cx: &mut Context<C>, signal: S, on_update: F)
 where
     C: 'static,
