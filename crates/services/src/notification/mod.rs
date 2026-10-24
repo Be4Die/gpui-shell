@@ -98,7 +98,7 @@ pub enum NotificationCommand {
     SetDnd(bool),
     MarkAllRead,
     InvokeAction(u32, String),
-    /// Keep the popups from expiring, as while the pointer is over them.
+    /// Pause popup expiry (pointer over the popups).
     HoldPopups(bool),
 }
 
@@ -108,7 +108,7 @@ pub struct NotificationSubscriber {
     data: Mutable<NotificationData>,
     lifecycle: Lifecycle,
     jobs: JobQueue<NotificationCommand>,
-    /// While set, expiry timers wait instead of closing their popup.
+    /// Expiry timers wait while set.
     popups_held: Arc<AtomicBool>,
 }
 
@@ -573,8 +573,6 @@ impl NotificationServer {
             let popups_held = self.popups_held.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(timeout_ms as u64)).await;
-                // The pointer is over the popups: whoever is reading them
-                // gets to finish. The clock resumes once it leaves.
                 while popups_held.load(Ordering::Relaxed) {
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }

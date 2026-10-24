@@ -141,9 +141,13 @@ impl Tray {
             let panel_id = format!("systray-{}", item.name);
             let subscriber = self.subscriber.clone();
             let item_name = item.name.clone();
+            // Apps may build the menu only on AboutToShow; the panel picks up
+            // the new layout through its subscription.
+            subscriber.dispatch(TrayCommand::AboutToShow {
+                item_name: item_name.clone(),
+                menu_id: 0,
+            });
             let config = Config::global(cx);
-            // Menus run from one entry to dozens: the window hugs the menu
-            // and only scrolls past the cap.
             let size = PanelSize::FitHeight {
                 width: 260.0,
                 max_height: 520.0,
@@ -381,7 +385,9 @@ impl TrayMenuPanel {
 
             // Handle separator
             if props.type_.as_deref() == Some("separator")
-                || (label.is_empty() && children.is_empty())
+                || (label.is_empty()
+                    && children.is_empty()
+                    && props.children_display.as_deref() != Some("submenu"))
             {
                 elements.push(render_menu_separator().into_any_element());
                 continue;
@@ -389,7 +395,9 @@ impl TrayMenuPanel {
 
             let menu_id = *id;
             let is_enabled = props.enabled.unwrap_or(true);
-            let has_submenu = !children.is_empty();
+            // A lazily filled submenu has no children yet, only the flag.
+            let has_submenu =
+                !children.is_empty() || props.children_display.as_deref() == Some("submenu");
             let is_expanded = has_submenu && self.is_submenu_expanded(menu_id);
 
             elements.push(

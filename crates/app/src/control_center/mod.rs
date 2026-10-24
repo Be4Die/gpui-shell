@@ -40,8 +40,7 @@ pub use quick_toggles::ExpandedSection;
 pub use wifi::WifiPasswordState;
 
 pub const CONTROL_CENTER_PANEL_WIDTH: f32 = 340.0;
-/// The panel follows its content; this only caps an expanded section, and the
-/// window host clamps it to the output anyway.
+/// Cap for an expanded section; the window host also clamps to the output.
 pub const CONTROL_CENTER_PANEL_MAX_HEIGHT: f32 = 900.0;
 
 type ToggleSectionCallback = Rc<dyn Fn(ExpandedSection, &mut App)>;
@@ -671,7 +670,6 @@ impl Render for ControlCenter {
                 })
         };
 
-        // The panel window sizes itself to this content (`windows::PanelHost`).
         build_root(cx)
     }
 }

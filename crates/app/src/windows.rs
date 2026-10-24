@@ -1,19 +1,6 @@
-//! The shell's transient windows.
-//!
-//! Panels - tray menus, the control center, the notification center, the dock
-//! menus - are one-at-a-time layer-shell windows anchored next to whatever
-//! opened them. The launcher and the notification popups are windows of their
-//! own. [`ShellWindows`] is the single registry of what is open, so the rest
-//! of the shell asks it instead of guessing: the dock, for one, must not read
-//! "the compositor reports no focused toplevel" as "the desktop is bare" while
-//! it is our own panel that took the keyboard.
-//!
-//! A layer-shell window cannot be sized from its content by the compositor,
-//! so a panel that wants to hug its content opens at a guess, measures what it
-//! renders, and asks for that size. [`PanelHost`] does this for every panel
-//! sized [`PanelSize::FitHeight`] and paints nothing until the window has the
-//! size it asked for - the blank first frame is transparent, where a frame of
-//! content at the wrong size is the flicker.
+//! The shell's transient windows: panels (one at a time), the launcher and
+//! the notification popups. [`ShellWindows`] tracks what is open; [`PanelHost`]
+//! sizes a [`PanelSize::FitHeight`] panel to its content before painting it.
 
 use gpui::{
     AnyElement, AnyWindowHandle, App, AvailableSpace, Bounds, Context, DisplayId, Entity, Global,
@@ -31,18 +18,19 @@ use crate::config::BarPosition;
 /// How a panel window is sized.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PanelSize {
-    /// A window of exactly this size; the content lays out inside it.
-    Fixed { width: f32, height: f32 },
-    /// A window this wide whose height follows the content, up to
-    /// `max_height` and never past the output's usable area. Content taller
-    /// than the cap has to scroll itself.
-    FitHeight { width: f32, max_height: f32 },
+    Fixed {
+        width: f32,
+        height: f32,
+    },
+    /// Height follows the content, capped at `max_height` and the output.
+    FitHeight {
+        width: f32,
+        max_height: f32,
+    },
 }
 
 impl PanelSize {
-    /// The size the window opens at. A fitted panel opens at its cap and
-    /// shrinks to its content before it paints, so placement can assume the
-    /// largest it will ever be.
+    /// The size the window opens at: a fitted panel's cap.
     pub fn initial(&self) -> Size<Pixels> {
         match self {
             PanelSize::Fixed { width, height } => size(px(*width), px(*height)),
@@ -234,29 +222,25 @@ fn margin_from_click(
 // Fitting a window to its content
 // ============================================================================
 
-/// The resize handshake of a window that follows its content.
+/// Frames a size is re-requested before painting at whatever was granted.
+const MAX_RESIZE_ATTEMPTS: u8 = 4;
+
+/// Resize handshake for a window that follows its content. Nothing is
+/// painted until the first fit lands; later fits paint at the old size.
 ///
-/// `window.resize` on a layer-shell surface asks the compositor for the size
-/// and applies it a tick later, so a render that measures a new size has to
-/// decide what to paint meanwhile. Before the first fit nothing is painted;
-/// after it the content is, because a blink of nothing on every expand would
-/// be worse than one frame at the old size.
+/// The request is repeated each frame: gpui applies every compositor
+/// `configure`, and a stale one (the reply to the first commit) can undo a
+/// single request.
 #[derive(Debug, Default)]
 pub struct WindowFit {
-    /// The size last asked of the compositor, so an answer it rounds
-    /// differently cannot start a resize loop.
     requested: Option<Size<Pixels>>,
-    /// Frames rendered since the last request, to give up waiting on a
-    /// compositor that never grants exactly what was asked.
-    frames_since_request: u8,
+    attempts: u8,
     settled: bool,
 }
 
 impl WindowFit {
-    /// Measure `content` at `width` and bring the window to its height,
-    /// capped at `max_height` and the output's usable height less
-    /// `vertical_margin`. Returns whether the content should be painted this
-    /// frame.
+    /// Measure `content` at `width` and resize the window to it, within
+    /// `max_height` and the output. Returns whether to paint this frame.
     pub fn fit_height(
         &mut self,
         window: &mut Window,
@@ -290,19 +274,18 @@ impl WindowFit {
         if window.viewport_size() == desired {
             self.settled = true;
             self.requested = Some(desired);
+            self.attempts = 0;
             return true;
         }
         if self.requested != Some(desired) {
             self.requested = Some(desired);
-            self.frames_since_request = 0;
+            self.attempts = 0;
+        }
+        if self.attempts < MAX_RESIZE_ATTEMPTS {
+            self.attempts += 1;
             window.resize(desired);
         } else {
-            self.frames_since_request = self.frames_since_request.saturating_add(1);
-            // Asked twice and still not there: the compositor has its own
-            // idea of the size, so paint into whatever it gave us.
-            if self.frames_since_request >= 2 {
-                self.settled = true;
-            }
+            self.settled = true;
         }
         self.settled
     }
@@ -313,8 +296,7 @@ impl WindowFit {
     }
 }
 
-/// The window a panel renders in: sizes the window for its content when the
-/// panel asked for that, and paints the content once the window fits.
+/// Root view of a panel window; fits the window to the content if asked.
 pub struct PanelHost<V: Render> {
     content: Entity<V>,
     size: PanelSize,
@@ -370,9 +352,8 @@ impl ShellWindows {
         cx.windows().contains(&handle)
     }
 
-    /// Whether one of our windows took the keyboard: a panel or the launcher
-    /// is open. While it is, the compositor reports no focused toplevel, which
-    /// says nothing about what is on the desktop.
+    /// A panel or the launcher is open and holds the keyboard, so the
+    /// compositor reports no focused toplevel.
     pub fn holds_keyboard_focus(cx: &App) -> bool {
         let Some(this) = cx.try_global::<Self>() else {
             return false;
@@ -385,14 +366,12 @@ impl ShellWindows {
                 .is_some_and(|handle| Self::is_alive(cx, handle))
     }
 
-    /// Remember the launcher window; its liveness is checked on every ask, so
-    /// a launcher that closed itself needs no bookkeeping.
+    /// Remember the launcher window. Liveness is checked on use.
     pub fn set_launcher(cx: &mut App, handle: Option<AnyWindowHandle>) {
         cx.default_global::<Self>().launcher = handle;
     }
 
     /// The ID of the open panel, if any.
-    #[allow(dead_code)]
     pub fn active_panel_id(cx: &App) -> Option<String> {
         let this = cx.try_global::<Self>()?;
         let panel = this.panel.as_ref()?;
@@ -405,8 +384,8 @@ impl ShellWindows {
         Self::active_panel_id(cx).as_deref() == Some(panel_id)
     }
 
-    /// Open the panel with this ID, or close it if it is the one open. Any
-    /// other open panel closes first. Returns true if the panel was opened.
+    /// Open this panel, or close it if it is the one open. Any other panel
+    /// closes first. Returns true if opened.
     pub fn toggle_panel<V: Render + 'static>(
         cx: &mut App,
         panel_id: &str,
@@ -425,10 +404,13 @@ impl ShellWindows {
         build: impl FnOnce(&mut Context<V>) -> V + 'static,
     ) -> bool {
         if let Some(open) = cx.default_global::<Self>().panel.take() {
-            let _ = cx.update_window(open.handle, |_, window, _cx| {
-                window.remove_window();
-            });
-            if open.id == panel_id {
+            // A panel that already closed itself does not count as a toggle.
+            let was_open = cx
+                .update_window(open.handle, |_, window, _cx| {
+                    window.remove_window();
+                })
+                .is_ok();
+            if was_open && open.id == panel_id {
                 return false;
             }
         }

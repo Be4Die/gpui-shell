@@ -1,12 +1,6 @@
-//! The notification popups: one layer-shell window per output, holding the
-//! notifications that have not expired or been dismissed.
-//!
-//! At rest the window shows a pile - the newest notification, compact, with
-//! the edges of up to two more peeking out beneath it. Pointer over the pile
-//! and it fans out: every notification, with its full body and actions, and
-//! no expiry while the pointer stays. The window is only ever as big as what
-//! it shows, and only the cards take input, so the desktop beneath an empty
-//! corner of it keeps getting the clicks.
+//! Notification popups: one window per output. At rest a pile (newest card,
+//! up to two peeking edges); hovered, it fans out, shows full cards and holds
+//! expiry. The window fits its content and only the cards take input.
 
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -32,11 +26,9 @@ use super::config::{NotificationConfig, NotificationPopupPosition};
 static POPUP_STATE: LazyLock<Mutex<HashMap<Option<DisplayId>, PopupWindowState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// How many notifications peek out from under the top one at rest.
 const PEEK_COUNT: usize = 2;
-/// Height of one peeking edge.
 const PEEK_HEIGHT: f32 = 6.0;
-/// How much narrower each peeking edge is than the card above it, per side.
+/// Per side, per level of depth.
 const PEEK_INSET: f32 = 10.0;
 
 struct PopupWindowState {
@@ -47,10 +39,9 @@ struct PopupWindowState {
 struct NotificationPopupStack {
     subscriber: NotificationSubscriber,
     notifications: Vec<Notification>,
-    /// The pointer is over the stack: it is fanned out and held open.
     hovered: bool,
     fit: WindowFit,
-    /// The window size the input region was last cut for.
+    /// Window size the input region was last set for.
     input_region_for: Option<Size<gpui::Pixels>>,
 }
 
@@ -75,7 +66,7 @@ impl NotificationPopupStack {
         cx.notify();
     }
 
-    /// One notification card. Compact at rest, full when fanned out.
+    /// Compact at rest, full when fanned out.
     fn render_card(
         &self,
         notification: &Notification,
@@ -122,7 +113,7 @@ impl NotificationPopupStack {
             .into_any_element()
     }
 
-    /// The edges of the notifications under the top card, at rest.
+    /// A peeking edge of a notification under the top card.
     fn render_peek(&self, depth: usize, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let inset = PEEK_INSET * (depth + 1) as f32;
@@ -191,8 +182,7 @@ impl Render for NotificationPopupStack {
             px(margin.0 + margin.2),
         );
 
-        // Only the cards take the pointer; the padding around them, and the
-        // window while it is still blank, pass clicks through to the desktop.
+        // Clicks outside the cards pass through to the desktop.
         if let Some(window_size) = self.fit.requested()
             && self.input_region_for != Some(window_size)
         {
@@ -294,7 +284,7 @@ fn close_popups(subscriber: &NotificationSubscriber, cx: &mut App) {
             window.remove_window();
         });
     }
-    // A window that closed under the pointer never saw it leave.
+    // A window closed under the pointer never saw it leave.
     subscriber.dispatch(NotificationCommand::HoldPopups(false));
 }
 

@@ -34,8 +34,6 @@ impl NotificationWidget {
     fn toggle_center(&self, at: Point<Pixels>, window: &Window, cx: &mut App) {
         let config = Config::global(cx);
         let notification_config = &config.notification;
-        // An empty center is a header and a line; a full one scrolls at the
-        // configured height.
         let size = PanelSize::FitHeight {
             width: notification_config.center_width,
             max_height: notification_config.center_height,

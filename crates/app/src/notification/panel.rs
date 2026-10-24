@@ -154,8 +154,7 @@ impl Render for NotificationCenter {
                     ),
             )
             .child(
-                // Grows from its content (so the panel can size itself to
-                // the list) and shrinks to scroll once the panel hits its cap.
+                // Sized by content so the panel can fit it; scrolls at the cap.
                 div()
                     .id("notification-center-list")
                     .flex_grow_1()

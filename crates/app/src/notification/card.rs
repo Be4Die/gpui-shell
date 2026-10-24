@@ -3,9 +3,7 @@ use gpui::{Context, MouseButton, div, img, px};
 use services::{Notification, NotificationCommand, NotificationSubscriber};
 use ui::{ActiveTheme, Radius, Spacing, TextSize};
 
-/// The body of one notification. `compact` keeps it to the app, the summary
-/// and one line of body with no actions - the shape of a popup at rest, before
-/// the pointer expands it.
+/// `compact`: one body line, no actions (a popup at rest).
 pub(super) fn notification_card_body<V>(
     notification: &Notification,
     cx: &Context<V>,

@@ -43,6 +43,11 @@ fn dock_context_menu_height(action_count: usize) -> f32 {
     content_height + gaps + vertical_padding + borders + DOCK_CONTEXT_MENU_TEXT_LAYOUT_HEADROOM
 }
 
+/// The right-click menu or the app picker is open.
+fn dock_menu_is_open(cx: &App) -> bool {
+    crate::windows::ShellWindows::active_panel_id(cx).is_some_and(|id| id.starts_with("dock-"))
+}
+
 fn dock_context_menu_size(action_count: usize) -> Size<gpui::Pixels> {
     Size::new(
         px(DOCK_CONTEXT_MENU_WIDTH),
@@ -107,11 +112,26 @@ fn dock_panel_placement_from_dock_click(
 
     let click_x: f32 = dock_x + Into::<f32>::into(dock_click.x);
     let click_y: f32 = dock_y + Into::<f32>::into(dock_click.y);
+
+    // Bottom-anchored so a menu shorter than `menu_size` still sits on the dock.
+    if dock_position == crate::bar::config::BarPosition::Bottom {
+        let origin_x = click_x - menu_width / 2.0;
+        let bottom = display_height - dock_y;
+        let max_bottom = (display_height - min_y - menu_height).max(0.0);
+        return DockPanelPlacement {
+            anchor: Anchor::BOTTOM | Anchor::LEFT,
+            margin: (
+                0.0,
+                0.0,
+                clamp_dock_menu_origin(bottom, 0.0, max_bottom),
+                clamp_dock_menu_origin(origin_x, min_x, max_x),
+            ),
+        };
+    }
+
     let (origin_x, origin_y) = match dock_position {
         crate::bar::config::BarPosition::Top => (click_x - menu_width / 2.0, dock_y + dock_height),
-        crate::bar::config::BarPosition::Bottom => {
-            (click_x - menu_width / 2.0, dock_y - menu_height)
-        }
+        crate::bar::config::BarPosition::Bottom => unreachable!("handled above"),
         crate::bar::config::BarPosition::Left => (dock_x + dock_width, click_y - menu_height / 2.0),
         crate::bar::config::BarPosition::Right => {
             (dock_x - menu_width, click_y - menu_height / 2.0)
@@ -137,8 +157,13 @@ fn dock_panel_placement_from_event(
     dock_size: Size<gpui::Pixels>,
     menu_size: Size<gpui::Pixels>,
 ) -> DockPanelPlacement {
-    let (display_bounds, usable_bounds) = display_id_for_window(window)
-        .and_then(|display_id| cx.find_display(display_id))
+    // Without a display the dock's viewport stands in and the menu clamps to
+    // the top-left corner.
+    let (display_bounds, usable_bounds) = window
+        .display(cx)
+        .or_else(|| {
+            display_id_for_window(window).and_then(|display_id| cx.find_display(display_id))
+        })
         .map(|display| (display.bounds(), display.visible_bounds()))
         .unwrap_or_else(|| {
             let bounds = Bounds::new(point(px(0.0), px(0.0)), window.viewport_size());
@@ -440,6 +465,8 @@ struct Dock {
     cycle_index: HashMap<String, usize>,
     revealed: bool,
     hidden_by_rule: bool,
+    /// A rehide timer is waiting for the dock's menu to close.
+    menu_hold: bool,
     reveal_generation: u64,
     hide_generation: u64,
 }
@@ -460,6 +487,7 @@ impl Dock {
             cycle_index: HashMap::new(),
             revealed: true,
             hidden_by_rule: false,
+            menu_hold: false,
             reveal_generation: 0,
             hide_generation: 0,
         }
@@ -491,9 +519,7 @@ impl Dock {
         let monitor_name = self.current_monitor_name(window, cx);
         let focused_window = self.focused_window();
 
-        // A panel or the launcher took the keyboard, so the compositor reports
-        // no focused toplevel. The windows underneath did not move: keep the
-        // decision made before our window opened instead of revealing.
+        // Our own window holds the keyboard; the windows underneath did not move.
         if focused_window.is_none() && crate::windows::ShellWindows::holds_keyboard_focus(cx) {
             return if self.hidden_by_rule {
                 DockHideBehavior::Immediate
@@ -541,7 +567,15 @@ impl Dock {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(DOCK_REVEAL_TIMEOUT).await;
             let _ = this.update(cx, |this, cx| {
-                if this.hidden_by_rule && this.reveal_generation == generation {
+                if this.reveal_generation != generation {
+                    return;
+                }
+                if dock_menu_is_open(cx) {
+                    this.schedule_rehide(cx);
+                    return;
+                }
+                this.menu_hold = false;
+                if this.hidden_by_rule {
                     this.revealed = false;
                     cx.notify();
                 }
@@ -558,7 +592,14 @@ impl Dock {
                 .timer(DOCK_INITIAL_HIDE_DELAY)
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.hidden_by_rule && this.hide_generation == generation {
+                if this.hide_generation != generation {
+                    return;
+                }
+                if dock_menu_is_open(cx) {
+                    this.schedule_initial_hide(cx);
+                    return;
+                }
+                if this.hidden_by_rule {
                     this.revealed = false;
                     cx.notify();
                 }
@@ -717,9 +758,9 @@ impl Dock {
                         panel_size,
                     );
                     let panel_config = crate::windows::PanelConfig {
-                        size: crate::windows::PanelSize::Fixed {
+                        size: crate::windows::PanelSize::FitHeight {
                             width: DOCK_CONTEXT_MENU_WIDTH,
-                            height: panel_height,
+                            max_height: panel_height * 2.0,
                         },
                         anchor: placement.anchor,
                         margin: placement.margin,
@@ -795,6 +836,15 @@ impl Render for Dock {
             InitialHideAction::ScheduleDelayedHide => self.schedule_initial_hide(cx),
         }
         self.hidden_by_rule = is_hidden_by_rule;
+
+        // Stay revealed while a dock menu is open; the timer re-arms until it closes.
+        if dock_menu_is_open(cx) {
+            self.revealed = true;
+            if !self.menu_hold {
+                self.menu_hold = true;
+                self.schedule_rehide(cx);
+            }
+        }
 
         if !self.revealed {
             let strip_size = hidden_strip_size(position, dock_size);
@@ -1383,8 +1433,8 @@ mod tests {
             Bounds::new(point(px(0.0), px(0.0)), Size::new(px(1000.0), px(800.0))),
         );
 
-        assert_eq!(placement.anchor, Anchor::TOP | Anchor::LEFT);
-        assert_eq!(placement.margin, (627.0, 0.0, 0.0, 446.0));
+        assert_eq!(placement.anchor, Anchor::BOTTOM | Anchor::LEFT);
+        assert_eq!(placement.margin, (0.0, 0.0, 69.0, 446.0));
     }
 
     #[test]
@@ -1440,7 +1490,8 @@ mod tests {
             Bounds::new(point(px(20.0), px(10.0)), Size::new(px(260.0), px(170.0))),
         );
 
-        assert_eq!(placement.margin, (27.0, 0.0, 0.0, 120.0));
+        assert_eq!(placement.anchor, Anchor::BOTTOM | Anchor::LEFT);
+        assert_eq!(placement.margin, (0.0, 0.0, 69.0, 120.0));
     }
 
     #[test]
@@ -1457,8 +1508,8 @@ mod tests {
             Bounds::new(point(px(0.0), px(0.0)), Size::new(px(1000.0), px(800.0))),
         );
 
-        assert_eq!(placement.anchor, Anchor::TOP | Anchor::LEFT);
-        assert_eq!(placement.margin, (451.0, 0.0, 0.0, 406.0));
+        assert_eq!(placement.anchor, Anchor::BOTTOM | Anchor::LEFT);
+        assert_eq!(placement.margin, (0.0, 0.0, 69.0, 406.0));
     }
 
     #[test]
