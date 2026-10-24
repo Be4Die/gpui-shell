@@ -29,15 +29,6 @@ pub struct State {
     pinned: Option<Vec<String>>,
     /// Overrides `[services]`, per service.
     services: BTreeMap<String, ServiceMode>,
-    /// Overrides the wallpaper view's matugen defaults.
-    wallpaper: WallpaperToggles,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(default)]
-struct WallpaperToggles {
-    matugen: Option<bool>,
-    dark_mode: Option<bool>,
 }
 
 impl Global for State {}
@@ -85,25 +76,6 @@ impl State {
         cx.global_mut::<Self>()
             .services
             .insert(name.to_lowercase(), mode);
-        Self::save(cx);
-    }
-
-    /// Wallpaper matugen `(enabled, dark_mode)`: what the UI last saved, else
-    /// `[launcher.views.wallpaper]`.
-    pub fn wallpaper_toggles(cx: &App) -> (bool, bool) {
-        let saved = cx.global::<Self>().wallpaper;
-        let config = &cx.config().launcher.views.wallpaper;
-        (
-            saved.matugen.unwrap_or(config.matugen),
-            saved.dark_mode.unwrap_or(config.dark_mode),
-        )
-    }
-
-    pub fn set_wallpaper_toggles(matugen: bool, dark_mode: bool, cx: &mut App) {
-        cx.global_mut::<Self>().wallpaper = WallpaperToggles {
-            matugen: Some(matugen),
-            dark_mode: Some(dark_mode),
-        };
         Self::save(cx);
     }
 
@@ -180,7 +152,6 @@ mod tests {
         let state = State {
             pinned: Some(vec!["firefox.desktop".to_string()]),
             services: modes(&[("tray", ServiceMode::Off)]),
-            ..State::default()
         };
 
         let encoded = toml::to_string_pretty(&state).expect("state serializes");

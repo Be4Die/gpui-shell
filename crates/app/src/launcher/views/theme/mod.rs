@@ -122,8 +122,13 @@ fn load() -> Loaded {
 /// Swap only the palette, keeping the user's font size and token overrides,
 /// and persist it off the UI thread.
 fn apply_scheme(scheme: &ThemeScheme, cx: &mut App) {
+    apply_palette(scheme.name.clone(), scheme.palette, cx);
+}
+
+/// Make `palette` the theme and save it to `theme.toml`.
+pub(crate) fn apply_palette(name: gpui::SharedString, palette: Base16Palette, cx: &mut App) {
     let mut theme = cx.theme().clone();
-    theme.set_palette(scheme.name.clone(), scheme.palette);
+    theme.set_palette(name, palette);
     Theme::set(theme.clone(), cx);
     cx.background_spawn(async move {
         if let Err(err) = Config::save_theme_value(&theme) {
@@ -134,8 +139,12 @@ fn apply_scheme(scheme: &ThemeScheme, cx: &mut App) {
 }
 
 fn is_active(scheme: &ThemeScheme, theme: &Theme) -> bool {
-    colors_match(scheme.palette.base0d, theme.colors.accent)
-        && colors_match(scheme.palette.base00, theme.colors.background)
+    palette_is_active(&scheme.palette, theme)
+}
+
+pub(crate) fn palette_is_active(palette: &Base16Palette, theme: &Theme) -> bool {
+    colors_match(palette.base0d, theme.colors.accent)
+        && colors_match(palette.base00, theme.colors.background)
 }
 
 impl EventEmitter<ViewEvent> for ThemeView {}

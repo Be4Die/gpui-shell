@@ -40,8 +40,7 @@ Browse and apply wallpapers from a directory. Optionally generates a color schem
 | `prefix`                  | `string` | `";wp"`               | Command prefix to invoke the wallpaper module. |
 | `directory`               | `string` | `"~/Pictures/Wallpapers"` | Directory containing wallpaper images.        |
 | `columns`                 | `integer` | `3`                   | Thumbnail cards per grid row.                 |
-| `matugen`                 | `bool`   | `true`                 | Generate a theme from the applied wallpaper. The toggle in the view overrides it and is remembered in `state.toml`. |
-| `dark_mode`               | `bool`   | `true`                 | Generate a dark rather than light theme. Overridden like `matugen`. |
+| `matugen`                 | `bool`   | `true`                 | After a wallpaper is applied, generate dark and light themes from it in the background and offer them above the grid. Nothing is applied until you pick one. |
 | `matugen_scheme`          | `string` | `"scheme-tonal-spot"`  | matugen `--type` to generate with.            |
 
 Thumbnails are decoded once and cached in `$XDG_CACHE_HOME/gpuishell/thumbs/`.

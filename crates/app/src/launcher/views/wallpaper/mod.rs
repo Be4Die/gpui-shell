@@ -1,5 +1,6 @@
-//! Wallpaper view: a grid of thumbnails. Applying one can also generate a
-//! matching theme with matugen.
+//! Wallpaper view: a grid of thumbnails. Applying one generates a matching
+//! theme with matugen in the background; it waits above the grid until
+//! picked.
 
 pub mod config;
 
@@ -7,22 +8,22 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use gpui::{
-    AnyElement, App, Context, EntityId, EventEmitter, ObjectFit, Pixels, SharedString, Window, div,
-    img, prelude::*, px, size,
+    AnyElement, App, Context, EntityId, EventEmitter, Global, Hsla, ObjectFit, Pixels,
+    SharedString, Window, div, img, prelude::*, px, size,
 };
 use services::WallpaperCommand;
 use ui::{
     ActiveTheme, Base16Palette, Color, Icon, IconName, IconSize, Label, LabelCommon, Radius,
-    Spacing, Switch, SwitchSize, TextSize, Theme, ToggleState,
+    Spacing, TextSize, WallpaperPalettes,
 };
 
 use self::config::WallpaperConfig;
-use crate::config::State;
 use crate::launcher::item::{Item, ItemIcon};
 use crate::launcher::row::thumbnail_image;
 use crate::launcher::view::{
     Body, Items, LauncherView, Outcome, ViewDescriptor, ViewEvent, ViewMeta, list_row_height,
 };
+use crate::launcher::views::theme::{apply_palette, palette_is_active};
 use crate::state::AppState;
 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp"];
@@ -48,6 +49,26 @@ pub fn descriptor(config: &WallpaperConfig) -> ViewDescriptor {
     )
 }
 
+/// The theme generated from the last applied wallpaper. A global, so it
+/// outlives the launcher window.
+#[derive(Default)]
+struct GeneratedTheme {
+    state: Generation,
+    /// Bumped per wallpaper, so a slower earlier run can't land last.
+    id: u64,
+}
+
+#[derive(Default)]
+enum Generation {
+    #[default]
+    Idle,
+    Running(SharedString),
+    Ready(SharedString, Box<WallpaperPalettes>),
+    Failed(SharedString),
+}
+
+impl Global for GeneratedTheme {}
+
 struct WallpaperEntry {
     path: PathBuf,
     name: String,
@@ -62,7 +83,6 @@ pub struct WallpaperView {
     scanning: bool,
     columns: usize,
     matugen: bool,
-    dark_mode: bool,
     matugen_scheme: String,
     /// Thumbnail loads notify this view, which redraws the launcher.
     owner: EntityId,
@@ -85,56 +105,103 @@ impl WallpaperView {
         })
         .detach();
 
-        let (matugen, dark_mode) = State::wallpaper_toggles(cx);
+        cx.default_global::<GeneratedTheme>();
+        cx.observe_global::<GeneratedTheme>(|_, cx| cx.notify())
+            .detach();
+
         Self {
             directory,
             entries: Vec::new(),
             scanning: true,
             columns: config.columns.max(1),
-            matugen,
-            dark_mode,
+            matugen: config.matugen,
             matugen_scheme: config.matugen_scheme.clone(),
             owner: cx.entity_id(),
         }
     }
 
-    fn set_toggles(&mut self, matugen: bool, dark_mode: bool, cx: &mut Context<Self>) {
-        self.matugen = matugen;
-        self.dark_mode = dark_mode;
-        State::set_wallpaper_toggles(matugen, dark_mode, cx);
-        cx.notify();
-    }
-
-    fn apply(&self, path: PathBuf, cx: &mut Context<Self>) {
+    fn apply(&self, path: PathBuf, name: SharedString, cx: &mut Context<Self>) {
         AppState::wallpaper(cx).dispatch(WallpaperCommand::SetWallpaper(path.clone()));
-        if !self.matugen {
-            return;
+        if self.matugen {
+            generate_theme(path, name, self.matugen_scheme.clone(), cx);
         }
-
-        let mode = if self.dark_mode { "dark" } else { "light" };
-        let scheme = self.matugen_scheme.clone();
-        cx.spawn(async move |_, cx| {
-            let result = cx
-                .background_spawn({
-                    let path = path.clone();
-                    async move { Base16Palette::generate_from_wallpaper(&path, mode, &scheme, 0) }
-                })
-                .await;
-            match result {
-                Ok(palette) => {
-                    tracing::debug!("Matugen palette generated for {}", path.display());
-                    // Keep the user's font size and token overrides.
-                    cx.update(|cx| {
-                        let mut theme = cx.theme().clone();
-                        theme.set_palette("Wallpaper", palette);
-                        Theme::set(theme, cx);
-                    });
-                }
-                Err(err) => tracing::warn!("Failed to generate matugen theme: {err}"),
-            }
-        })
-        .detach();
     }
+}
+
+/// Run matugen off the UI thread; the result is offered, not applied.
+fn generate_theme(path: PathBuf, name: SharedString, scheme: String, cx: &mut App) {
+    let global = cx.global_mut::<GeneratedTheme>();
+    global.id += 1;
+    global.state = Generation::Running(name.clone());
+    let id = global.id;
+
+    cx.spawn(async move |cx| {
+        let result = cx
+            .background_spawn(async move { Base16Palette::generate_from_wallpaper(&path, &scheme) })
+            .await;
+        cx.update(|cx| {
+            let global = cx.global_mut::<GeneratedTheme>();
+            if global.id != id {
+                return;
+            }
+            global.state = match result {
+                Ok(palettes) => Generation::Ready(name, Box::new(palettes)),
+                Err(err) => {
+                    tracing::warn!("Failed to generate matugen theme: {err}");
+                    Generation::Failed(err.to_string().into())
+                }
+            };
+        });
+    })
+    .detach();
+}
+
+/// A clickable chip previewing one generated palette.
+fn palette_chip(
+    id: &'static str,
+    label: &'static str,
+    palette: Base16Palette,
+    name: SharedString,
+    cx: &App,
+) -> impl IntoElement {
+    let colors = cx.theme().colors();
+    let active = palette_is_active(&palette, cx.theme());
+    let swatch = |color: Hsla| div().size(px(10.)).rounded_full().bg(color);
+
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(Spacing::Small.pixels())
+        .px(Spacing::Medium.pixels())
+        .py(px(4.))
+        .rounded(Radius::Small.pixels())
+        .bg(palette.base00)
+        .border_1()
+        .border_color(if active { colors.accent } else { colors.border })
+        .cursor_pointer()
+        .hover(|s| s.border_color(colors.accent))
+        .child(
+            div().flex().gap(px(2.)).children(
+                [
+                    palette.base05,
+                    palette.base08,
+                    palette.base0b,
+                    palette.base0d,
+                    palette.base0e,
+                ]
+                .map(swatch),
+            ),
+        )
+        .child(
+            div()
+                .text_size(TextSize::XSmall.rems())
+                .text_color(palette.base05)
+                .child(label),
+        )
+        .on_click(move |_, _, cx| {
+            apply_palette(format!("Wallpaper: {name}").into(), palette, cx);
+        })
 }
 
 impl EventEmitter<ViewEvent> for WallpaperView {}
@@ -158,7 +225,7 @@ impl LauncherView for WallpaperView {
     }
 
     fn activate(&mut self, item: &Item, _action: &str, cx: &mut Context<Self>) -> Outcome {
-        self.apply(PathBuf::from(item.id.as_ref()), cx);
+        self.apply(PathBuf::from(item.id.as_ref()), item.title.clone(), cx);
         Outcome::Stay
     }
 
@@ -234,14 +301,41 @@ impl LauncherView for WallpaperView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if !self.matugen {
+            return None;
+        }
         let colors = cx.theme().colors();
-        let (matugen, dark_mode) = (self.matugen, self.dark_mode);
-        let mode_icon = |icon: IconName, on: bool| {
-            Icon::new(icon).size(IconSize::XSmall).color(if on {
-                Color::Accent
-            } else {
-                Color::Muted
-            })
+        let (status, status_color): (SharedString, Color) = match &cx
+            .global::<GeneratedTheme>()
+            .state
+        {
+            Generation::Idle => ("Apply a wallpaper to generate one".into(), Color::Muted),
+            Generation::Running(name) => (format!("Generating from {name}…").into(), Color::Muted),
+            Generation::Ready(name, _) => (format!("From {name}").into(), Color::Muted),
+            Generation::Failed(err) => (err.clone(), Color::Error),
+        };
+        let chips = match &cx.global::<GeneratedTheme>().state {
+            Generation::Ready(name, palettes) => Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::Medium.pixels())
+                    .child(palette_chip(
+                        "wallpaper-theme-dark",
+                        "Dark",
+                        palettes.dark,
+                        name.clone(),
+                        cx,
+                    ))
+                    .child(palette_chip(
+                        "wallpaper-theme-light",
+                        "Light",
+                        palettes.light,
+                        name.clone(),
+                        cx,
+                    )),
+            ),
+            _ => None,
         };
 
         Some(
@@ -249,6 +343,7 @@ impl LauncherView for WallpaperView {
                 .flex()
                 .items_center()
                 .justify_between()
+                .gap(Spacing::Large.pixels())
                 .px(Spacing::XLarge.pixels())
                 .py(Spacing::Medium.pixels())
                 .bg(colors.surface_background)
@@ -259,49 +354,27 @@ impl LauncherView for WallpaperView {
                         .flex()
                         .items_center()
                         .gap(Spacing::Large.pixels())
+                        .min_w(px(0.))
                         .child(
                             Icon::new(IconName::Palette)
                                 .size(IconSize::Small)
-                                .color(if matugen { Color::Accent } else { Color::Muted }),
+                                .color(Color::Accent),
                         )
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
-                                .child(Label::new("Material You theming").size(TextSize::Small))
+                                .min_w(px(0.))
+                                .child(Label::new("Theme from wallpaper").size(TextSize::Small))
                                 .child(
-                                    Label::new("Generate theme colors from the wallpaper")
+                                    Label::new(status)
                                         .size(TextSize::XSmall)
-                                        .color(Color::Muted),
+                                        .color(status_color)
+                                        .truncate(),
                                 ),
                         ),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::Medium.pixels())
-                        .when(matugen, |el| {
-                            el.child(mode_icon(IconName::Sun, !dark_mode))
-                                .child(
-                                    Switch::new("matugen-dark-mode", dark_mode)
-                                        .size(SwitchSize::Small)
-                                        .on_click(cx.listener(
-                                            move |this, state: &ToggleState, _, cx| {
-                                                this.set_toggles(matugen, state.selected(), cx);
-                                            },
-                                        )),
-                                )
-                                .child(mode_icon(IconName::Moon, dark_mode))
-                        })
-                        .child(
-                            Switch::new("matugen-toggle", matugen)
-                                .size(SwitchSize::Medium)
-                                .on_click(cx.listener(move |this, state: &ToggleState, _, cx| {
-                                    this.set_toggles(state.selected(), dark_mode, cx);
-                                })),
-                        ),
-                )
+                .children(chips)
                 .into_any_element(),
         )
     }

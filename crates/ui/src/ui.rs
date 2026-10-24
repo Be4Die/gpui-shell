@@ -16,7 +16,7 @@ pub use styles::ElevationIndex;
 pub use theme::{
     ActiveTheme, Appearance, Base16Palette, Color, IconSize, Radius, Spacing, StatusColors,
     StatusColorsRefinement, StoredTheme, TextSize, Theme, ThemeColors, ThemeColorsRefinement,
-    ThemeScheme, builtin_schemes,
+    ThemeScheme, WallpaperPalettes, builtin_schemes,
 };
 pub use thumbnail::{Thumbnail, ThumbnailCache, ThumbnailKey};
 pub use traits::*;
