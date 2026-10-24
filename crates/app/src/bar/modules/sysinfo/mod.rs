@@ -65,7 +65,7 @@ impl SysInfo {
             namespace: "sysinfo-panel".to_string(),
         };
 
-        ShellWindows::toggle_panel(cx, "sysinfo", config, move |cx| {
+        ShellWindows::toggle_panel(cx, window, "sysinfo", config, move |cx| {
             SysInfoPanel::new(subscriber, cx)
         });
     }

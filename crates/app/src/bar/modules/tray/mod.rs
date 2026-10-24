@@ -162,7 +162,7 @@ impl Tray {
                 namespace: "systray-menu".to_string(),
             };
 
-            ShellWindows::toggle_panel(cx, &panel_id, config, move |cx| {
+            ShellWindows::toggle_panel(cx, window, &panel_id, config, move |cx| {
                 TrayMenuPanel::new(menu, item_name, subscriber, cx)
             });
         } else {

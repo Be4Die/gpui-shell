@@ -50,7 +50,7 @@ impl NotificationWidget {
             namespace: "notification-center".to_string(),
         };
 
-        ShellWindows::toggle_panel(cx, "notification-center", panel_config, move |cx| {
+        ShellWindows::toggle_panel(cx, window, "notification-center", panel_config, move |cx| {
             NotificationCenter::new(subscriber, cx)
         });
     }

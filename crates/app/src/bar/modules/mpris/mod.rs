@@ -54,7 +54,7 @@ impl Mpris {
             namespace: "mpris-panel".to_string(),
         };
 
-        ShellWindows::toggle_panel(cx, "mpris", config, move |cx| {
+        ShellWindows::toggle_panel(cx, window, "mpris", config, move |cx| {
             MprisPanel::new(subscriber, cx)
         });
     }

@@ -116,7 +116,7 @@ impl Settings {
             namespace: "control-center".to_string(),
         };
 
-        ShellWindows::toggle_panel(cx, "control-center", config, move |cx| {
+        ShellWindows::toggle_panel(cx, window, "control-center", config, move |cx| {
             ControlCenter::new(cx)
         });
     }

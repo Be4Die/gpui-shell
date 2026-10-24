@@ -52,7 +52,7 @@ pub fn descriptor(config: &WallpaperConfig) -> ViewDescriptor {
 /// The theme generated from the last applied wallpaper. A global, so it
 /// outlives the launcher window.
 #[derive(Default)]
-struct GeneratedTheme {
+pub(crate) struct GeneratedTheme {
     state: Generation,
     /// Bumped per wallpaper, so a slower earlier run can't land last.
     id: u64,
@@ -68,6 +68,26 @@ enum Generation {
 }
 
 impl Global for GeneratedTheme {}
+
+/// The wallpaper the last generated theme came from, with both its palettes.
+pub(crate) fn generated_palettes(cx: &App) -> Option<(SharedString, WallpaperPalettes)> {
+    match &cx.try_global::<GeneratedTheme>()?.state {
+        Generation::Ready(name, palettes) => Some((name.clone(), **palettes)),
+        _ => None,
+    }
+}
+
+const GENERATED_PREFIX: &str = "Wallpaper: ";
+
+/// The theme name `apply_palette` gets for a wallpaper's palette.
+pub(crate) fn generated_theme_name(wallpaper: &str) -> String {
+    format!("{GENERATED_PREFIX}{wallpaper}")
+}
+
+/// The wallpaper a theme name made by [`generated_theme_name`] came from.
+pub(crate) fn wallpaper_of_theme_name(name: &str) -> Option<&str> {
+    name.strip_prefix(GENERATED_PREFIX)
+}
 
 struct WallpaperEntry {
     path: PathBuf,
@@ -200,7 +220,7 @@ fn palette_chip(
                 .child(label),
         )
         .on_click(move |_, _, cx| {
-            apply_palette(format!("Wallpaper: {name}").into(), palette, cx);
+            apply_palette(generated_theme_name(&name).into(), palette, cx);
         })
 }
 

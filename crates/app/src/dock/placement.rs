@@ -1,7 +1,7 @@
 use gpui::{App, Bounds, MouseDownEvent, Size, Window, layer_shell::Anchor, point, px};
 use ui::Spacing;
 
-use crate::state::display_id_for_window;
+use crate::windows::ShellWindows;
 
 use super::{
     DOCK_CONTEXT_MENU_BORDER_WIDTH, DOCK_CONTEXT_MENU_GAP, DOCK_CONTEXT_MENU_ROW_HEIGHT,
@@ -122,11 +122,7 @@ pub(super) fn dock_panel_placement_from_event(
     dock_size: Size<gpui::Pixels>,
     menu_size: Size<gpui::Pixels>,
 ) -> DockPanelPlacement {
-    let (display_bounds, usable_bounds) = window
-        .display(cx)
-        .or_else(|| {
-            display_id_for_window(window, cx).and_then(|display_id| cx.find_display(display_id))
-        })
+    let (display_bounds, usable_bounds) = ShellWindows::display(cx, window)
         .map(|display| (display.bounds(), display.visible_bounds()))
         .unwrap_or_else(|| {
             let bounds = Bounds::new(point(px(0.0), px(0.0)), window.viewport_size());

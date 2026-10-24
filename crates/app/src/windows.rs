@@ -3,11 +3,12 @@
 //! sizes a [`PanelSize::FitHeight`] panel to its content before painting it.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use gpui::{
     AnyElement, AnyWindowHandle, App, AvailableSpace, Bounds, Context, DisplayId, Entity, Global,
-    Pixels, Point, Render, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, size,
+    Pixels, PlatformDisplay, Point, Render, Size, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, size,
 };
 use ui::ActiveTheme;
 
@@ -73,8 +74,7 @@ pub fn panel_placement_from_event(
     cx: &App,
     panel_size: Size<Pixels>,
 ) -> (Anchor, (f32, f32, f32, f32)) {
-    let (display_bounds, usable_bounds) = window
-        .display(cx)
+    let (display_bounds, usable_bounds) = ShellWindows::display(cx, window)
         .map(|display| (display.bounds(), display.visible_bounds()))
         .unwrap_or_else(|| {
             let bounds = window.bounds();
@@ -262,7 +262,7 @@ impl WindowFit {
             .height;
 
         let mut cap = max_height;
-        if let Some(display) = window.display(cx) {
+        if let Some(display) = ShellWindows::display(cx, window) {
             let usable = display.visible_bounds().size.height - vertical_margin;
             if usable > px(0.) {
                 cap = cap.min(usable);
@@ -383,9 +383,10 @@ impl ShellWindows {
 
     pub fn record_display(cx: &mut App, handle: AnyWindowHandle, display_id: Option<DisplayId>) {
         if let Some(display_id) = display_id {
-            cx.default_global::<Self>()
-                .displays
-                .insert(handle, display_id);
+            let open = cx.windows();
+            let displays = &mut cx.default_global::<Self>().displays;
+            displays.retain(|handle, _| open.contains(handle));
+            displays.insert(handle, display_id);
         }
     }
 
@@ -394,6 +395,14 @@ impl ShellWindows {
             .displays
             .get(&window.window_handle())
             .copied()
+    }
+
+    /// The output `window` was opened on. Prefer this to `window.display()`,
+    /// which is unreliable for layer-shell windows.
+    pub fn display(cx: &App, window: &Window) -> Option<Rc<dyn PlatformDisplay>> {
+        Self::display_for_window(cx, window)
+            .and_then(|display_id| cx.find_display(display_id))
+            .or_else(|| window.display(cx))
     }
 
     pub(crate) fn osd(cx: &App) -> Option<crate::osd::OsdWindowState> {
@@ -430,15 +439,17 @@ impl ShellWindows {
         Self::active_panel_id(cx).as_deref() == Some(panel_id)
     }
 
-    /// Open this panel, or close it if it is the one open. Any other panel
-    /// closes first. Returns true if opened.
+    /// Open this panel on `window`'s output, or close it if it is the one
+    /// open. Any other panel closes first. Returns true if opened.
     pub fn toggle_panel<V: Render + 'static>(
         cx: &mut App,
+        window: &Window,
         panel_id: &str,
         config: PanelConfig,
         build: impl FnOnce(&mut Context<V>) -> V + 'static,
     ) -> bool {
-        Self::toggle_panel_on_display(cx, panel_id, config, None, build)
+        let display_id = Self::display_for_window(cx, window);
+        Self::toggle_panel_on_display(cx, panel_id, config, display_id, build)
     }
 
     /// [`Self::toggle_panel`] on an explicitly selected output.
@@ -503,6 +514,7 @@ impl ShellWindows {
             return false;
         };
 
+        Self::record_display(cx, handle.into(), display_id);
         cx.default_global::<Self>().panel = Some(OpenPanel {
             id: panel_id.to_string(),
             handle: handle.into(),
