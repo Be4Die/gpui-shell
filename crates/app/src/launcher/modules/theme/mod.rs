@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, EventEmitter, FontWeight, Hsla, Pixels, SharedString,
-    Window, div, prelude::*, px,
+    AnyElement, App, ClickEvent, Context, FontWeight, Hsla, Pixels, SharedString, Window, div,
+    prelude::*, px,
 };
 use services::{THEME_PROVIDERS, ThemeProvider, ThemeRepository, load_stylix_scheme};
 use ui::{
@@ -20,14 +20,12 @@ use ui::{
 
 use self::config::ThemesConfig;
 use crate::config::Config;
-use crate::launcher::item::Item;
-use crate::launcher::module::{
-    Hint, Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, NavKey, Outcome,
-    list_row_height,
-};
+use crate::launcher::action::{Action, ActionPanel, Outcome};
+use crate::launcher::content::{Content, Dropdown, DropdownItem, EmptyView, Item, List, Section};
 use crate::launcher::modules::wallpaper::{
     GeneratedTheme, generated_palettes, generated_theme_name, wallpaper_of_theme_name,
 };
+use crate::launcher::page::{LauncherPage, ModuleDescriptor, ModuleMeta};
 
 const THEME_ICON: IconName = IconName::Palette;
 
@@ -93,6 +91,27 @@ enum Filter {
 }
 
 impl Filter {
+    fn value(self) -> &'static str {
+        match self {
+            Filter::All => "all",
+            Filter::Source(source) => source.label(),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Filter::All => "All",
+            Filter::Source(source) => source.label(),
+        }
+    }
+
+    fn from_value(value: &str) -> Self {
+        Source::ALL
+            .into_iter()
+            .find(|source| source.label() == value)
+            .map_or(Filter::All, Filter::Source)
+    }
+
     fn accepts(self, source: Source) -> bool {
         match self {
             Filter::All => true,
@@ -193,7 +212,6 @@ impl ThemeModule {
                 });
             }
         }
-        cx.emit(ModuleEvent::ItemsChanged);
         cx.notify();
     }
 
@@ -267,18 +285,7 @@ impl ThemeModule {
             return;
         }
         self.filter = filter;
-        cx.emit(ModuleEvent::ItemsChanged);
         cx.notify();
-    }
-
-    fn cycle_filter(&mut self, step: isize, cx: &mut Context<Self>) {
-        let filters = self.filters();
-        let current = filters
-            .iter()
-            .position(|filter| *filter == self.filter)
-            .unwrap_or(0) as isize;
-        let next = (current + step).rem_euclid(filters.len() as isize) as usize;
-        self.set_filter(filters[next], cx);
     }
 
     fn entry(&self, item: &Item) -> Option<&Entry> {
@@ -389,58 +396,45 @@ fn colors_match(a: Hsla, b: Hsla) -> bool {
     (a.h - b.h).abs() < 0.01 && (a.s - b.s).abs() < 0.01 && (a.l - b.l).abs() < 0.01
 }
 
-impl EventEmitter<ModuleEvent> for ThemeModule {}
+impl LauncherPage for ThemeModule {
+    fn content(&mut self, _query: &str, cx: &mut Context<Self>) -> Content {
+        let mut dropdown =
+            Dropdown::new(self.filter.value(), cx, |this: &mut Self, value, _, cx| {
+                this.set_filter(Filter::from_value(&value), cx);
+            });
+        for filter in self.filters() {
+            let (count, icon) = match filter {
+                Filter::All => (self.entries.len(), None),
+                Filter::Source(source) => (self.count(source), Some(source.icon())),
+            };
+            let mut item =
+                DropdownItem::new(filter.value(), filter.label()).badge(count.to_string());
+            if let Some(icon) = icon {
+                item = item.icon(icon);
+            }
+            dropdown = dropdown.item(item);
+        }
 
-impl LauncherModule for ThemeModule {
-    fn items(&mut self, _query: &str, _cx: &mut Context<Self>) -> Items {
-        Items::Ready(
-            self.entries
+        let mut list = List::new()
+            .placeholder("Search themes...")
+            .dropdown(dropdown)
+            .empty(self.empty_view());
+        for source in Source::ALL.into_iter().filter(|s| self.filter.accepts(*s)) {
+            let items: Vec<Item> = self
+                .entries
                 .iter()
                 .enumerate()
-                .filter(|(_, entry)| self.filter.accepts(entry.source))
-                .map(|(ix, entry)| {
-                    Item::new(ix.to_string(), entry.title())
-                        .subtitle(entry.detail.clone())
-                        .keywords(entry.source.label())
-                        .action("apply", "Apply")
-                })
-                .collect(),
-        )
-    }
-
-    fn activate(&mut self, item: &Item, _action: &str, cx: &mut Context<Self>) -> Outcome {
-        if let Some(entry) = self.entry(item) {
-            apply_palette(entry.name.clone(), entry.palette, cx);
+                .filter(|(_, entry)| entry.source == source)
+                .map(|(ix, entry)| self.item(ix, entry, cx))
+                .collect();
+            if !items.is_empty() {
+                list = list.section(Section::new(source.label()).items(items));
+            }
         }
-        Outcome::Stay
+        list.into()
     }
 
-    fn on_key(&mut self, key: NavKey, cx: &mut Context<Self>) -> Option<Outcome> {
-        match key {
-            NavKey::Left => self.cycle_filter(-1, cx),
-            NavKey::Right => self.cycle_filter(1, cx),
-            _ => return None,
-        }
-        Some(Outcome::Stay)
-    }
-
-    fn footer_hints(&self, _selected: Option<&Item>) -> Option<Vec<Hint>> {
-        Some(vec![
-            ("Apply".into(), "Enter".into()),
-            ("Filter".into(), "← →".into()),
-            ("Close".into(), "Esc".into()),
-        ])
-    }
-
-    fn row_height(&self, cx: &App) -> Pixels {
-        // Card padding and border, plus the gap between cards.
-        list_row_height(cx, &[TextSize::Small, TextSize::XSmall], ROW_TILE.1)
-            + Spacing::XSmall.pixels() * 2.
-            + px(2.)
-            + px(4.)
-    }
-
-    fn render_row(
+    fn render_item(
         &self,
         item: &Item,
         selected: bool,
@@ -472,16 +466,6 @@ impl LauncherModule for ThemeModule {
         let theme = cx.theme().clone();
         let current = self.current_entry(&theme).cloned();
 
-        let chips = self.filters().into_iter().enumerate().map(|(ix, filter)| {
-            let (label, count, icon) = match filter {
-                Filter::All => ("All", self.entries.len(), None),
-                Filter::Source(source) => (source.label(), self.count(source), Some(source.icon())),
-            };
-            filter_chip(ix, label, icon, count, filter == self.filter, &theme).on_click(
-                cx.listener(move |this, _: &ClickEvent, _, cx| this.set_filter(filter, cx)),
-            )
-        });
-
         let registries = self.registries.clone().into_iter().map(|registry| {
             let provider = registry.provider;
             let fetching = self.fetching.contains(provider.id);
@@ -500,32 +484,66 @@ impl LauncherModule for ThemeModule {
                 .gap(Spacing::Small.pixels())
                 .px(Spacing::Medium.pixels())
                 .pt(Spacing::XSmall.pixels())
-                .pb(Spacing::Small.pixels())
                 .child(render_current_card(&theme, current.as_ref()))
                 .children(registries)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(Spacing::XSmall.pixels())
-                        .px(px(2.))
-                        .children(chips),
-                )
                 .into_any_element(),
         )
     }
+}
 
-    fn empty_text(&self) -> Option<SharedString> {
+impl ThemeModule {
+    fn item(&self, ix: usize, entry: &Entry, cx: &Context<Self>) -> Item {
+        let mut actions = ActionPanel::new()
+            .action(
+                Action::listener("Apply", cx, move |this, _, cx| {
+                    if let Some(entry) = this.entries.get(ix) {
+                        apply_palette(entry.name.clone(), entry.palette, cx);
+                    }
+                    Outcome::Stay
+                })
+                .icon(IconName::Check),
+            )
+            .action(Action::copy(entry.name.clone()).title("Copy Name"));
+        let registries = self.registries.iter().map(|registry| {
+            let provider = registry.provider;
+            let verb = if registry.cached {
+                "Update"
+            } else {
+                "Download"
+            };
+            Action::listener(
+                format!("{verb} {}", provider.name),
+                cx,
+                move |this, _, cx| {
+                    this.fetch(provider, cx);
+                    Outcome::Stay
+                },
+            )
+            .icon(IconName::Download)
+        });
+        actions = actions.section("Registries", registries);
+
+        Item::new(ix.to_string(), entry.title())
+            .subtitle(entry.detail.clone())
+            .keywords(entry.source.label())
+            .actions(actions)
+    }
+
+    fn empty_view(&self) -> EmptyView {
         let registry = self.registries.first();
-        Some(match self.filter {
+        match self.filter {
             Filter::Source(Source::Registry) if registry.is_some_and(|r| !r.cached) => {
-                "Download the registry above to browse its schemes".into()
+                EmptyView::new("No registry schemes yet")
+                    .description("Download the registry above to browse its schemes")
+                    .icon(IconName::Download)
             }
             Filter::Source(Source::Wallpaper) if self.count(Source::Wallpaper) == 0 => {
-                "Apply a wallpaper with matugen enabled to generate a theme".into()
+                EmptyView::new("No wallpaper themes")
+                    .description("Apply a wallpaper with matugen enabled to generate one")
+                    .icon(IconName::Image)
             }
-            _ => "No themes match".into(),
-        })
+            _ => EmptyView::new("No themes match"),
+        }
     }
 }
 
@@ -746,55 +764,6 @@ fn render_registry_row(
                         .map(|icon| Icon::new(icon).size(IconSize::XSmall).color(Color::Accent)),
                 )
                 .child(action),
-        )
-}
-
-fn filter_chip(
-    ix: usize,
-    label: &'static str,
-    icon: Option<IconName>,
-    count: usize,
-    selected: bool,
-    theme: &Theme,
-) -> gpui::Stateful<gpui::Div> {
-    let colors = theme.colors();
-    div()
-        .id(("theme-filter", ix))
-        .flex()
-        .items_center()
-        .gap(Spacing::XSmall.pixels())
-        .px(Spacing::Medium.pixels())
-        .py(px(3.))
-        .rounded_full()
-        .border_1()
-        .cursor_pointer()
-        .text_size(TextSize::XSmall.rems())
-        .when(selected, |el| {
-            el.bg(colors.element_selected)
-                .border_color(colors.accent)
-                .text_color(colors.text)
-        })
-        .when(!selected, |el| {
-            el.border_color(colors.border_variant)
-                .text_color(colors.text_muted)
-                .hover(|s| s.bg(colors.element_hover).border_color(colors.border))
-        })
-        .children(icon.map(|icon| {
-            Icon::new(icon).size(IconSize::XSmall).color(if selected {
-                Color::Accent
-            } else {
-                Color::Muted
-            })
-        }))
-        .child(div().font_weight(FontWeight::MEDIUM).child(label))
-        .child(
-            div()
-                .text_color(if selected {
-                    colors.text_muted
-                } else {
-                    colors.text_disabled
-                })
-                .child(count.to_string()),
         )
 }
 

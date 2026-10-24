@@ -4,17 +4,14 @@
 pub mod config;
 mod eval;
 
-use gpui::{
-    ClipboardItem, Context, EventEmitter, FontWeight, IntoElement, Render, SharedString, Window,
-    div, prelude::*,
-};
+use gpui::{Context, FontWeight, IntoElement, Render, SharedString, Window, div, prelude::*};
 use ui::{ActiveTheme, Color, IconName, Label, LabelCommon, Radius, Spacing, TextSize};
 
 use self::config::CalculatorConfig;
 use self::eval::{Evaluation, evaluate, format_number};
-use crate::launcher::module::{
-    Body, Hint, Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, NavKey, Outcome,
-};
+use crate::launcher::action::{Action, ActionPanel};
+use crate::launcher::content::{Content, Custom};
+use crate::launcher::page::{LauncherPage, ModuleDescriptor, ModuleMeta};
 
 pub fn descriptor(config: &CalculatorConfig) -> ModuleDescriptor {
     ModuleDescriptor::new(
@@ -48,45 +45,15 @@ impl CalculatorModule {
     }
 }
 
-impl EventEmitter<ModuleEvent> for CalculatorModule {}
-
-impl LauncherModule for CalculatorModule {
-    fn items(&mut self, query: &str, cx: &mut Context<Self>) -> Items {
+impl LauncherPage for CalculatorModule {
+    fn content(&mut self, query: &str, cx: &mut Context<Self>) -> Content {
         self.expression = query.trim().to_string();
         self.evaluation = (!self.expression.is_empty()).then(|| evaluate(&self.expression));
-        cx.notify();
-        Items::Ready(Vec::new())
-    }
-
-    fn activate(
-        &mut self,
-        _item: &crate::launcher::item::Item,
-        _action: &str,
-        _cx: &mut Context<Self>,
-    ) -> Outcome {
-        Outcome::Stay
-    }
-
-    fn body(&mut self, cx: &mut Context<Self>) -> Body {
-        Body::Custom(cx.entity().into())
-    }
-
-    fn on_key(&mut self, key: NavKey, cx: &mut Context<Self>) -> Option<Outcome> {
-        if key != NavKey::Enter {
-            return None;
-        }
-        let value = self.formatted()?;
-        cx.write_to_clipboard(ClipboardItem::new_string(value));
-        Some(Outcome::Close)
-    }
-
-    fn footer_hints(&self, _selected: Option<&crate::launcher::item::Item>) -> Option<Vec<Hint>> {
-        let mut hints: Vec<Hint> = Vec::new();
-        if self.formatted().is_some() {
-            hints.push(("Copy".into(), "Enter".into()));
-        }
-        hints.push(("Close".into(), "Esc".into()));
-        Some(hints)
+        let actions = match self.formatted() {
+            Some(value) => ActionPanel::new().action(Action::copy(value).title("Copy Result")),
+            None => ActionPanel::new(),
+        };
+        Custom::new(cx.entity()).actions(actions).into()
     }
 }
 

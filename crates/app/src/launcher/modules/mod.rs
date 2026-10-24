@@ -12,7 +12,7 @@ pub mod web;
 pub mod workspaces;
 
 use super::config::ModulesConfig;
-use super::module::ModuleDescriptor;
+use super::page::ModuleDescriptor;
 
 /// Every module, in help and footer order. Help comes last so it can list the
 /// rest.

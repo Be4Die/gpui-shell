@@ -3,7 +3,7 @@
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-use super::item::Item;
+use super::content::Item;
 
 /// An item that matched, with the byte offsets of its matched title chars.
 pub struct Ranked {

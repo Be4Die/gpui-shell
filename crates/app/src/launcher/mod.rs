@@ -1,66 +1,160 @@
 //! Keyboard-driven launcher. The launcher owns the window, the input, the
-//! selection and the rows; modules (`modules/`) supply items or a custom body.
+//! page stack, the selection and the drawing; pages (`modules/`) describe
+//! their [`Content`](content::Content) and actions.
 
+pub mod action;
 pub mod config;
-pub mod item;
+pub mod content;
+mod detail;
 mod matcher;
-pub mod module;
 pub mod modules;
+pub mod page;
 mod route;
 pub mod row;
 
 use std::ops::Range;
 
 use gpui::{
-    App, Bounds, ClickEvent, Context, EntityId, FocusHandle, Focusable, Point, ScrollHandle, Size,
-    Subscription, Task, Window, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, div, layer_shell::*, prelude::*, px,
+    AnyElement, App, Bounds, ClickEvent, Context, EntityId, FocusHandle, Focusable, MouseButton,
+    Point, ScrollHandle, SharedString, Size, Subscription, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowKind, WindowOptions, div, layer_shell::*, prelude::*, px, relative, size,
 };
 use ui::patterns::{LauncherFrame, footer_hints};
 use ui::{
-    ActiveTheme, Color, InputBuffer, Label, LabelCommon, ScrollStrategy, Spacing, TextSize,
-    ThumbnailCache, VirtualList, VirtualListScrollHandle, render_input_line,
+    ActiveTheme, Color, Icon, IconSize, InputBuffer, Label, LabelCommon, Radius, ScrollStrategy,
+    Spacing, TextSize, ThumbnailCache, VirtualList, VirtualListScrollHandle, render_input_line,
 };
 
-use self::item::Item;
-use self::matcher::{Ranked, Ranker};
-use self::module::{
-    Body, Hint, Items, Matching, ModuleDescriptor, ModuleHandle, ModuleMeta, NavKey, Outcome,
+use self::action::{Action, ActionPanel, Outcome};
+use self::content::{
+    Chrome, Collection, Content, Custom, Detail, Dropdown, EmptyView, GridLayout, Item, ListLayout,
 };
+use self::matcher::{Ranked, Ranker};
+use self::page::{ModuleDescriptor, ModuleMeta, Page};
 use self::route::Route;
 use crate::config::Config;
 use crate::keybinds::{
     Backspace, Cancel, Confirm, CursorDown, CursorLeft, CursorRight, CursorUp, DeleteWordBack,
     PageDown, PageUp, SecondaryConfirm, SelectAll, SelectLeft, SelectRight, SelectWordLeft,
-    SelectWordRight, WordLeft, WordRight,
+    SelectWordRight, ToggleActions, WordLeft, WordRight,
 };
 
 /// Rows to jump on Page Up/Down.
 const ROWS_PER_PAGE: usize = 7;
+/// Share of the width the list keeps beside an item's detail.
+const DETAIL_SPLIT: f32 = 0.42;
+
+#[derive(Clone, Copy)]
+enum Layout {
+    List { show_detail: bool },
+    Grid { columns: usize, aspect_ratio: f32 },
+}
+
+/// A page's content with the list/grid distinction folded into [`Layout`].
+enum Body {
+    Collection(Collection<Layout>),
+    Detail(Detail),
+    Custom(Custom),
+}
+
+impl From<Content> for Body {
+    fn from(content: Content) -> Self {
+        match content {
+            Content::List(list) => Body::Collection(
+                list.map_layout(|ListLayout { show_detail }| Layout::List { show_detail }),
+            ),
+            Content::Grid(grid) => Body::Collection(grid.map_layout(
+                |GridLayout {
+                     columns,
+                     aspect_ratio,
+                 }| Layout::Grid {
+                    columns,
+                    aspect_ratio,
+                },
+            )),
+            Content::Detail(detail) => Body::Detail(detail),
+            Content::Custom(custom) => Body::Custom(custom),
+        }
+    }
+}
+
+impl Body {
+    fn chrome(&self) -> &Chrome {
+        match self {
+            Body::Collection(c) => &c.chrome,
+            Body::Detail(d) => &d.chrome,
+            Body::Custom(c) => &c.chrome,
+        }
+    }
+
+    fn collection(&self) -> Option<&Collection<Layout>> {
+        match self {
+            Body::Collection(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    fn dropdown(&self) -> Option<&Dropdown> {
+        self.collection()?.dropdown.as_ref()
+    }
+}
+
+/// A matched item, in display order.
+struct Entry {
+    section: usize,
+    index: usize,
+    highlights: Vec<usize>,
+}
+
+enum Row {
+    Header(usize),
+    /// Entries drawn side by side; one in a list.
+    Items(Range<usize>),
+}
+
+/// A page pushed over the module, with what to restore when it pops.
+struct Pushed {
+    page: Page,
+    _observe: Subscription,
+    input: String,
+    selected: Option<SharedString>,
+}
+
+#[derive(Default)]
+struct ActionMenu {
+    filter: String,
+    selected: usize,
+}
 
 pub struct Launcher {
     input: InputBuffer,
     focus_handle: FocusHandle,
-    /// Scroll state for custom bodies.
+    /// Scroll state for detail and custom bodies.
     body_scroll: ScrollHandle,
-    list_scroll: VirtualListScrollHandle,
+    list: VirtualListScrollHandle,
     registry: Vec<ModuleDescriptor>,
     metas: Vec<ModuleMeta>,
     /// Built on first route, so modules nobody opens never start their services.
-    modules: Vec<Option<Box<dyn ModuleHandle>>>,
+    modules: Vec<Option<Page>>,
     subscriptions: Vec<Subscription>,
-    /// Input text `route` was computed from, so it is parsed once per edit.
+    stack: Vec<Pushed>,
+    /// Input text the query was taken from, so it is parsed once per edit.
     routed_input: String,
     route: Route,
-    items: Vec<Item>,
-    matches: Vec<Ranked>,
+    body: Option<Body>,
+    entries: Vec<Entry>,
+    rows: Vec<Row>,
+    /// The row each entry is drawn in.
+    entry_rows: Vec<usize>,
     selected: usize,
-    /// Columns of the body drawn last, for grid navigation.
-    columns: usize,
+    /// The page notified, or a search it filters itself changed.
+    dirty: bool,
+    /// The next rebuild starts at the top instead of keeping the selection.
+    reset_selection: bool,
+    /// Selected on the next rebuild, after a pop.
+    restore: Option<SharedString>,
+    menu: Option<ActionMenu>,
     ranker: Ranker,
-    /// Drops item replies that a newer query overtook.
-    generation: u64,
-    pending: Option<Task<()>>,
     owner: EntityId,
 }
 
@@ -77,30 +171,68 @@ impl Launcher {
             input,
             focus_handle: cx.focus_handle(),
             body_scroll: ScrollHandle::new(),
-            list_scroll: VirtualListScrollHandle::new(),
+            list: VirtualListScrollHandle::new(),
             modules: registry.iter().map(|_| None).collect(),
             registry,
             metas,
             subscriptions: Vec::new(),
+            stack: Vec::new(),
             routed_input,
             route,
-            items: Vec::new(),
-            matches: Vec::new(),
+            body: None,
+            entries: Vec::new(),
+            rows: Vec::new(),
+            entry_rows: Vec::new(),
             selected: 0,
-            columns: 1,
+            dirty: true,
+            reset_selection: true,
+            restore: None,
+            menu: None,
             ranker: Ranker::default(),
-            generation: 0,
-            pending: None,
             owner: cx.entity_id(),
         };
-        launcher.requery(false, cx);
+        launcher.build_root(cx);
         launcher
     }
 
     /// Replace the input (IPC `--input`).
     pub fn set_input(&mut self, input: String, cx: &mut Context<Self>) {
+        self.pop_to_root(cx);
         self.input.set_text(input);
         self.sync(cx);
+    }
+
+    fn build_root(&mut self, cx: &mut Context<Self>) {
+        let ix = self.route.module;
+        if self.modules.get(ix).is_some_and(Option::is_none) {
+            let page = self.registry[ix].build(cx);
+            self.subscriptions.push(page.observe(cx));
+            self.modules[ix] = Some(page);
+        }
+    }
+
+    fn current_page(&self) -> Option<&Page> {
+        match self.stack.last() {
+            Some(pushed) => Some(&pushed.page),
+            None => self.modules.get(self.route.module)?.as_ref(),
+        }
+    }
+
+    /// The search the current page sees: the input without the module
+    /// prefix, or all of it on a pushed page.
+    fn query(&self) -> &str {
+        if self.stack.is_empty() {
+            &self.route.query
+        } else {
+            self.input.text()
+        }
+    }
+
+    pub(crate) fn page_notified(&mut self, page: EntityId, cx: &mut Context<Self>) {
+        if self.current_page().map(Page::entity_id) == Some(page) {
+            self.dirty = true;
+            cx.notify();
+        }
     }
 
     /// Re-route after an edit. Cheap when the text did not change.
@@ -110,101 +242,177 @@ impl Launcher {
         }
         self.routed_input = self.input.text().to_string();
         cx.notify();
-        let route = route::route(&self.routed_input, &self.metas);
-        if route == self.route {
-            return;
-        }
-        if route.module != self.route.module {
-            self.items.clear();
-            self.matches.clear();
-        }
-        self.route = route;
-        self.requery(false, cx);
-    }
 
-    fn current(&self) -> Option<&dyn ModuleHandle> {
-        self.modules.get(self.route.module)?.as_deref()
-    }
-
-    /// Ask the current module for items. `keep_selection` holds the cursor on
-    /// the same item when the data changed under an unchanged query.
-    pub(crate) fn requery(&mut self, keep_selection: bool, cx: &mut Context<Self>) {
-        let ix = self.route.module;
-        if self.modules.get(ix).is_some_and(Option::is_none) {
-            let module = self.registry[ix].build(cx);
-            self.subscriptions.extend(module.connect(cx));
-            self.modules[ix] = Some(module);
-        }
-        if !keep_selection {
-            self.selected = 0;
-            self.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
-            self.body_scroll.set_offset(gpui::point(px(0.), px(0.)));
-        }
-
-        self.generation += 1;
-        let generation = self.generation;
-        let Some(module) = self.current() else { return };
-        match module.items(&self.route.query, cx) {
-            Items::Ready(items) => self.apply(items, keep_selection, cx),
-            Items::Pending(task) => {
-                self.pending = Some(cx.spawn(async move |this, cx| {
-                    let items = task.await;
-                    this.update(cx, |this, cx| {
-                        if this.generation == generation {
-                            this.apply(items, keep_selection, cx);
-                        }
-                    })
-                    .ok();
-                }));
+        if self.stack.is_empty() {
+            let route = route::route(&self.routed_input, &self.metas);
+            if route == self.route {
+                return;
+            }
+            let module_changed = route.module != self.route.module;
+            self.route = route;
+            if module_changed {
+                self.build_root(cx);
+                self.clear_body();
+                self.invalidate(true, cx);
+                return;
             }
         }
+
+        let filtered = self
+            .body
+            .as_ref()
+            .and_then(Body::collection)
+            .is_some_and(|c| c.filtering);
+        if filtered {
+            self.rank();
+            self.select_first();
+        } else {
+            self.invalidate(true, cx);
+        }
+    }
+
+    fn invalidate(&mut self, reset_selection: bool, cx: &mut Context<Self>) {
+        self.dirty = true;
+        self.reset_selection |= reset_selection;
         cx.notify();
     }
 
-    fn apply(&mut self, items: Vec<Item>, keep_selection: bool, cx: &mut Context<Self>) {
-        let previous = keep_selection
-            .then(|| self.selected_item().map(|item| item.id.clone()))
-            .flatten();
-        let matching = self
-            .current()
-            .map_or(Matching::Shell, |module| module.matching(cx));
-        self.matches = match matching {
-            Matching::Shell => self.ranker.rank(&self.route.query, &items),
-            Matching::Module => (0..items.len())
-                .map(|index| Ranked {
-                    index,
-                    highlights: Vec::new(),
-                })
-                .collect(),
+    fn clear_body(&mut self) {
+        self.body = None;
+        self.entries.clear();
+        self.rows.clear();
+        self.entry_rows.clear();
+        self.menu = None;
+    }
+
+    /// Ask the page for its content again if it changed since the last time.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+        let Some(page) = self.current_page().cloned() else {
+            return;
         };
-        self.items = items;
-        if let Some(id) = previous
+        let reset = std::mem::take(&mut self.reset_selection);
+        let keep = match self.restore.take() {
+            Some(id) => Some(id),
+            None if !reset => self.selected_item().map(|item| item.id.clone()),
+            None => None,
+        };
+
+        let query = self.query().to_string();
+        self.body = Some(page.content(&query, cx).into());
+        let rows_before = self.rows.len();
+        self.rank();
+
+        if let Some(id) = keep
             && let Some(pos) = self
-                .matches
+                .entries
                 .iter()
-                .position(|m| self.items[m.index].id == id)
+                .position(|entry| self.item(entry).is_some_and(|item| item.id == id))
         {
             self.selected = pos;
         }
-        self.selected = self.selected.min(self.matches.len().saturating_sub(1));
-        self.pending = None;
-        cx.notify();
+        if reset {
+            self.select_first();
+        } else {
+            self.selected = self.selected.min(self.entries.len().saturating_sub(1));
+            if self.rows.len() != rows_before {
+                self.scroll_to_selected();
+            }
+        }
+    }
+
+    /// Rank every section's items against the query and lay them out in
+    /// rows.
+    fn rank(&mut self) {
+        self.entries.clear();
+        self.rows.clear();
+        self.entry_rows.clear();
+        let query = self.query().to_string();
+        let Some(Body::Collection(collection)) = &self.body else {
+            return;
+        };
+        let columns = match collection.layout {
+            Layout::Grid { columns, .. } => columns,
+            Layout::List { .. } => 1,
+        };
+
+        for (section_ix, section) in collection.sections.iter().enumerate() {
+            let ranked = if collection.filtering {
+                self.ranker.rank(&query, &section.items)
+            } else {
+                (0..section.items.len())
+                    .map(|index| Ranked {
+                        index,
+                        highlights: Vec::new(),
+                    })
+                    .collect()
+            };
+            if ranked.is_empty() {
+                continue;
+            }
+            if section.title.is_some() {
+                self.rows.push(Row::Header(section_ix));
+            }
+            let start = self.entries.len();
+            self.entries.extend(ranked.into_iter().map(|r| Entry {
+                section: section_ix,
+                index: r.index,
+                highlights: r.highlights,
+            }));
+            let end = self.entries.len();
+            for row_start in (start..end).step_by(columns) {
+                let row_end = (row_start + columns).min(end);
+                self.entry_rows
+                    .extend(std::iter::repeat_n(self.rows.len(), row_end - row_start));
+                self.rows.push(Row::Items(row_start..row_end));
+            }
+        }
+    }
+
+    fn select_first(&mut self) {
+        self.selected = 0;
+        self.list.scroll_to_item(0, ScrollStrategy::Top);
+        self.body_scroll.set_offset(gpui::point(px(0.), px(0.)));
+    }
+
+    fn item(&self, entry: &Entry) -> Option<&Item> {
+        let collection = self.body.as_ref()?.collection()?;
+        collection
+            .sections
+            .get(entry.section)?
+            .items
+            .get(entry.index)
     }
 
     fn selected_item(&self) -> Option<&Item> {
-        let ranked = self.matches.get(self.selected)?;
-        self.items.get(ranked.index)
+        self.item(self.entries.get(self.selected)?)
     }
 
-    fn activate(&mut self, action: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = self.selected_item().cloned() else {
-            return;
-        };
-        let Some(action) = item.actions.get(action) else {
-            return;
-        };
-        let Some(module) = self.current() else { return };
-        let outcome = module.activate(&item, &action.id, cx);
+    /// The selected item's actions, or the view's when it has none.
+    fn current_actions(&self) -> Option<&ActionPanel> {
+        self.selected_item()
+            .map(|item| &item.actions)
+            .filter(|actions| !actions.is_empty())
+            .or_else(|| Some(&self.body.as_ref()?.chrome().actions))
+    }
+
+    fn activate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh(cx);
+        let action = self
+            .current_actions()
+            .and_then(|actions| actions.get(ix))
+            .cloned();
+        if let Some(action) = action {
+            self.run(&action, window, cx);
+        }
+    }
+
+    fn run(&mut self, action: &Action, window: &mut Window, cx: &mut Context<Self>) {
+        self.menu = None;
+        let outcome = action.run(window, cx);
         self.apply_outcome(outcome, window, cx);
     }
 
@@ -212,48 +420,127 @@ impl Launcher {
         match outcome {
             Outcome::Close => close(window, cx),
             Outcome::Stay => cx.notify(),
+            Outcome::Push(page) => self.push(page, cx),
+            Outcome::Pop => self.pop(cx),
+            Outcome::PopToRoot => self.pop_to_root(cx),
             Outcome::SetQuery(text) => {
+                self.pop_to_root(cx);
                 self.input.set_text(text);
                 self.sync(cx);
             }
         }
     }
 
+    fn push(&mut self, page: Page, cx: &mut Context<Self>) {
+        let observe = page.observe(cx);
+        self.stack.push(Pushed {
+            page,
+            _observe: observe,
+            input: self.input.text().to_string(),
+            selected: self.selected_item().map(|item| item.id.clone()),
+        });
+        self.input.set_text(String::new());
+        self.routed_input.clear();
+        self.clear_body();
+        self.invalidate(true, cx);
+    }
+
+    fn pop(&mut self, cx: &mut Context<Self>) {
+        if let Some(top) = self.stack.pop() {
+            self.restore_below(top, cx);
+        }
+    }
+
+    fn pop_to_root(&mut self, cx: &mut Context<Self>) {
+        if !self.stack.is_empty() {
+            let bottom = self.stack.swap_remove(0);
+            self.stack.clear();
+            self.restore_below(bottom, cx);
+        }
+    }
+
+    fn restore_below(&mut self, popped: Pushed, cx: &mut Context<Self>) {
+        self.input.set_text(popped.input.clone());
+        self.routed_input = popped.input;
+        self.restore = popped.selected;
+        self.clear_body();
+        self.invalidate(false, cx);
+    }
+
     fn navigate(&mut self, key: NavKey, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(module) = self.current()
-            && let Some(outcome) = module.on_key(key, cx)
-        {
-            self.apply_outcome(outcome, window, cx);
-            return;
+        self.refresh(cx);
+        if self.menu.is_some() {
+            return self.navigate_menu(key, window, cx);
         }
 
-        let count = self.matches.len();
-        let columns = self.columns.max(1);
+        let grid = self
+            .body
+            .as_ref()
+            .and_then(Body::collection)
+            .is_some_and(|c| matches!(c.layout, Layout::Grid { .. }));
+        let count = self.entries.len();
         match key {
             NavKey::Enter => return self.activate(0, window, cx),
-            NavKey::Left if columns > 1 => self.selected = self.selected.saturating_sub(1),
-            NavKey::Right if columns > 1 => {
+            NavKey::Left | NavKey::Right
+                if self.input.is_empty()
+                    && let Some(dropdown) = self.body.as_ref().and_then(Body::dropdown) =>
+            {
+                let step = if key == NavKey::Left { -1 } else { 1 };
+                if let Some(value) = dropdown.step(step) {
+                    let on_change = dropdown.on_change.clone();
+                    on_change(value, window, cx);
+                }
+            }
+            NavKey::Left if grid => self.selected = self.selected.saturating_sub(1),
+            NavKey::Right if grid => {
                 self.selected = (self.selected + 1).min(count.saturating_sub(1));
             }
             NavKey::Left => self.input.move_left(false),
             NavKey::Right => self.input.move_right(false),
             _ if count == 0 => {}
-            // A single column wraps; a grid stops at its edges.
-            NavKey::Up if columns == 1 => self.selected = (self.selected + count - 1) % count,
-            NavKey::Down if columns == 1 => self.selected = (self.selected + 1) % count,
-            NavKey::Up => self.selected = self.selected.saturating_sub(columns),
-            NavKey::Down => self.selected = (self.selected + columns).min(count - 1),
+            // A list wraps; a grid stops at its edges.
+            NavKey::Up if !grid => self.selected = (self.selected + count - 1) % count,
+            NavKey::Down if !grid => self.selected = (self.selected + 1) % count,
+            NavKey::Up => self.move_row(false),
+            NavKey::Down => self.move_row(true),
         }
         self.scroll_to_selected();
         cx.notify();
     }
 
+    /// Move to the same column in the next or previous row of items.
+    fn move_row(&mut self, down: bool) {
+        let Some(&row) = self.entry_rows.get(self.selected) else {
+            return;
+        };
+        let Row::Items(current) = &self.rows[row] else {
+            return;
+        };
+        let column = self.selected - current.start;
+        let mut rows: Box<dyn Iterator<Item = &Row>> = if down {
+            Box::new(self.rows[row + 1..].iter())
+        } else {
+            Box::new(self.rows[..row].iter().rev())
+        };
+        if let Some(Row::Items(target)) = rows.find(|row| matches!(row, Row::Items(_))) {
+            self.selected = (target.start + column).min(target.end - 1);
+        }
+    }
+
     fn page(&mut self, down: bool, cx: &mut Context<Self>) {
-        let count = self.matches.len();
-        if count == 0 {
+        self.refresh(cx);
+        let count = self.entries.len();
+        if count == 0 || self.menu.is_some() {
             return;
         }
-        let step = ROWS_PER_PAGE * self.columns.max(1);
+        let columns = match self.body.as_ref().and_then(Body::collection) {
+            Some(Collection {
+                layout: Layout::Grid { columns, .. },
+                ..
+            }) => *columns,
+            _ => 1,
+        };
+        let step = ROWS_PER_PAGE * columns;
         self.selected = if down {
             (self.selected + step).min(count - 1)
         } else {
@@ -264,17 +551,144 @@ impl Launcher {
     }
 
     fn scroll_to_selected(&self) {
-        self.list_scroll
-            .scroll_to_item(self.selected / self.columns.max(1), ScrollStrategy::Nearest);
+        let Some(&row) = self.entry_rows.get(self.selected) else {
+            return;
+        };
+        // The first entry brings its section header along.
+        let row = if self.selected == 0 { 0 } else { row };
+        self.list.scroll_to_item(row, ScrollStrategy::Nearest);
     }
 
     fn edit(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut InputBuffer)) {
+        if self.menu.is_some() {
+            return;
+        }
         edit(&mut self.input);
         self.sync(cx);
         cx.notify();
     }
 
+    fn type_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        match &mut self.menu {
+            Some(menu) => {
+                menu.filter.push_str(text);
+                menu.selected = 0;
+                cx.notify();
+            }
+            None => self.edit(cx, |input| input.insert_str(text)),
+        }
+    }
+
+    fn backspace(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = &mut self.menu {
+            menu.filter.pop();
+            menu.selected = 0;
+            cx.notify();
+        } else if self.input.is_empty() && !self.stack.is_empty() {
+            self.pop(cx);
+        } else {
+            self.edit(cx, InputBuffer::backspace);
+        }
+    }
+
+    fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.menu.take().is_some() {
+            cx.notify();
+        } else if !self.input.is_empty() {
+            self.edit(cx, InputBuffer::clear);
+        } else if !self.stack.is_empty() {
+            self.pop(cx);
+        } else {
+            close(window, cx);
+        }
+    }
+
+    fn toggle_menu(&mut self, cx: &mut Context<Self>) {
+        self.refresh(cx);
+        self.menu = match self.menu {
+            Some(_) => None,
+            None => self
+                .current_actions()
+                .is_some_and(|actions| !actions.is_empty())
+                .then(ActionMenu::default),
+        };
+        cx.notify();
+    }
+
+    /// The actions the menu filter keeps, with their section titles.
+    fn menu_actions(&self) -> Vec<(Option<SharedString>, Action)> {
+        let filter = self
+            .menu
+            .as_ref()
+            .map(|menu| menu.filter.to_lowercase())
+            .unwrap_or_default();
+        let Some(actions) = self.current_actions() else {
+            return Vec::new();
+        };
+        actions
+            .sections
+            .iter()
+            .flat_map(|section| {
+                section
+                    .actions
+                    .iter()
+                    .map(|action| (section.title.clone(), action.clone()))
+            })
+            .filter(|(_, action)| action.title.to_lowercase().contains(&filter))
+            .collect()
+    }
+
+    fn navigate_menu(&mut self, key: NavKey, window: &mut Window, cx: &mut Context<Self>) {
+        let actions = self.menu_actions();
+        let Some(menu) = &mut self.menu else { return };
+        let count = actions.len();
+        match key {
+            NavKey::Enter => {
+                if let Some((_, action)) = actions.get(menu.selected) {
+                    self.run(action, window, cx);
+                }
+                return;
+            }
+            _ if count == 0 => {}
+            NavKey::Up => menu.selected = (menu.selected + count - 1) % count,
+            NavKey::Down => menu.selected = (menu.selected + 1) % count,
+            NavKey::Left | NavKey::Right => {}
+        }
+        cx.notify();
+    }
+
+    /// Run the current action bound to `keystroke`, if any.
+    fn run_shortcut(
+        &mut self,
+        keystroke: &gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.refresh(cx);
+        let action = self
+            .current_actions()
+            .and_then(|actions| actions.iter().find(|a| a.matches(keystroke)))
+            .cloned();
+        match action {
+            Some(action) => {
+                self.run(&action, window, cx);
+                true
+            }
+            None => false,
+        }
+    }
+
     fn placeholder(&self) -> String {
+        if let Some(placeholder) = self
+            .body
+            .as_ref()
+            .and_then(|b| b.chrome().placeholder.clone())
+        {
+            return placeholder.to_string();
+        }
+        if !self.stack.is_empty() {
+            return "Search...".to_string();
+        }
         let default = self.metas.iter().find(|meta| meta.default);
         let help = self.metas.iter().find(|meta| meta.id == "help");
         match (default, help) {
@@ -287,8 +701,11 @@ impl Launcher {
         }
     }
 
-    /// Bare prefixes for the footer; full names live in help.
-    fn prefix_hints(&self) -> String {
+    /// Bare prefixes at the root; where you are once a page is pushed.
+    fn footer_left(&self) -> String {
+        if !self.stack.is_empty() {
+            return format!("{} › Esc to go back", self.metas[self.route.module].name);
+        }
         self.metas
             .iter()
             .map(|meta| meta.prefix.trim())
@@ -297,55 +714,340 @@ impl Launcher {
             .join("  ")
     }
 
-    fn render_list_row(
-        &self,
-        row: usize,
-        columns: usize,
-        height: gpui::Pixels,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let start = row * columns;
-        let end = (start + columns).min(self.matches.len());
-        let module = self.current();
-        let cells = (start..end).map(|ix| {
-            let ranked = &self.matches[ix];
-            let item = &self.items[ranked.index];
-            let selected = ix == self.selected;
-            let content = module
-                .and_then(|module| module.render_row(item, selected, window, cx))
+    fn footer_right(&self) -> Vec<(SharedString, SharedString)> {
+        let back: SharedString = if self.stack.is_empty() {
+            "Close".into()
+        } else {
+            "Back".into()
+        };
+        if self.menu.is_some() {
+            return vec![
+                ("Run".into(), "Enter".into()),
+                ("Close".into(), "Esc".into()),
+            ];
+        }
+        let mut hints: Vec<(SharedString, SharedString)> = Vec::new();
+        if let Some(actions) = self.current_actions() {
+            hints.extend(
+                actions
+                    .iter()
+                    .zip(["Enter", "Shift Enter"])
+                    .map(|(action, key)| (action.title.clone(), key.into())),
+            );
+            if actions.iter().nth(1).is_some() {
+                hints.push(("Actions".into(), "Tab".into()));
+            }
+        }
+        if self.input.is_empty() && self.body.as_ref().and_then(Body::dropdown).is_some() {
+            hints.push(("Filter".into(), "← →".into()));
+        }
+        hints.push((back, "Esc".into()));
+        hints
+    }
+
+    fn render_row(&self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let (Some(row), Some(Body::Collection(collection))) = (self.rows.get(ix), &self.body)
+        else {
+            return div().into_any_element();
+        };
+        let range = match row {
+            Row::Header(section) => {
+                return row::section_header(&collection.sections[*section], ix == 0);
+            }
+            Row::Items(range) => range.clone(),
+        };
+
+        let page = self.current_page();
+        let (columns, content_size, compact) = match collection.layout {
+            Layout::List { show_detail } => (1, size(px(0.), px(0.)), show_detail),
+            Layout::Grid {
+                columns,
+                aspect_ratio,
+            } => {
+                let gap = Spacing::Medium.pixels();
+                let width = (window.viewport_size().width - gap * 2. - gap * (columns - 1) as f32)
+                    / columns as f32
+                    // Cell padding and border.
+                    - Spacing::XSmall.pixels() * 2.
+                    - px(2.);
+                (columns, size(width, width / aspect_ratio), false)
+            }
+        };
+
+        let cells = range.clone().map(|entry_ix| {
+            let entry = &self.entries[entry_ix];
+            let item = &collection.sections[entry.section].items[entry.index];
+            let selected = entry_ix == self.selected;
+            let content = page
+                .and_then(|page| page.render_item(item, selected, window, cx))
                 .unwrap_or_else(|| {
-                    row::default_row(item, &ranked.highlights, selected, self.owner, window, cx)
+                    if columns > 1 {
+                        row::grid_cell(item, selected, content_size, self.owner, window, cx)
+                    } else {
+                        row::list_row(
+                            item,
+                            &entry.highlights,
+                            selected,
+                            compact,
+                            self.owner,
+                            window,
+                            cx,
+                        )
+                    }
                 });
             div()
-                .id(("launcher-row", ix))
+                .id(("launcher-item", entry_ix))
                 .flex_1()
                 .min_w(px(0.))
                 .h_full()
                 .flex()
                 .flex_col()
                 .justify_center()
-                .overflow_hidden()
                 .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.selected = ix;
+                    this.selected = entry_ix;
                     this.activate(0, window, cx);
                 }))
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _, _, cx| {
+                        this.selected = entry_ix;
+                        this.menu = None;
+                        this.toggle_menu(cx);
+                    }),
+                )
                 .child(content)
         });
-        let fillers = (end - start..columns).map(|_| div().flex_1());
+        let fillers = (range.len()..columns).map(|_| div().flex_1());
 
         div()
-            .h(height)
-            .w_full()
+            .size_full()
             .flex()
             .when(columns > 1, |el| {
                 el.gap(Spacing::Medium.pixels())
                     .px(Spacing::Medium.pixels())
+                    .pb(Spacing::Small.pixels())
             })
             .children(cells)
             .children(fillers)
             .into_any_element()
     }
+
+    fn render_body(&self, cx: &mut Context<Self>) -> AnyElement {
+        let scroll = |child: AnyElement, handle: &ScrollHandle| {
+            div()
+                .id("launcher-scroll")
+                .flex_1()
+                .overflow_y_scroll()
+                .track_scroll(handle)
+                .child(child)
+                .into_any_element()
+        };
+        let Some(body) = &self.body else {
+            return div().flex_1().into_any_element();
+        };
+        match body {
+            Body::Detail(detail) => scroll(detail::render_detail(detail, cx), &self.body_scroll),
+            Body::Custom(custom) => {
+                scroll(custom.view.clone().into_any_element(), &self.body_scroll)
+            }
+            Body::Collection(collection) if self.entries.is_empty() => {
+                let fallback = EmptyView::new("No results");
+                let empty = match (&collection.empty, collection.chrome.loading) {
+                    (Some(empty), _) => Some(empty),
+                    (None, false) => Some(&fallback),
+                    (None, true) => None,
+                };
+                row::empty_view(empty)
+            }
+            Body::Collection(collection) => {
+                let this = cx.entity().downgrade();
+                // Rows are as tall as the first row of items; a header is
+                // never measured.
+                let measured = self
+                    .rows
+                    .iter()
+                    .position(|row| matches!(row, Row::Items(_)));
+                // The list sizes itself from its own style, so it needs a
+                // parent with a definite height.
+                let list = div().size_full().child(
+                    VirtualList::new(
+                        "launcher-list",
+                        self.rows.len(),
+                        move |range: Range<usize>, window, cx| {
+                            this.update(cx, |this, cx| {
+                                range
+                                    .map(|ix| this.render_row(ix, window, cx))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default()
+                        },
+                    )
+                    .width_from_item(measured)
+                    .track_scroll(self.list.clone())
+                    .size_full(),
+                );
+                let Layout::List { show_detail: true } = collection.layout else {
+                    return div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .child(list)
+                        .into_any_element();
+                };
+                let detail = self
+                    .selected_item()
+                    .and_then(|item| item.detail.as_ref())
+                    .map(|detail| detail::render_detail(detail, cx));
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .flex()
+                    .child(div().w(relative(DETAIL_SPLIT)).h_full().child(list))
+                    .child(
+                        div()
+                            .w(px(1.))
+                            .h_full()
+                            .bg(cx.theme().colors().border_variant),
+                    )
+                    .child(
+                        div()
+                            .id("launcher-detail")
+                            .flex_1()
+                            .h_full()
+                            .overflow_y_scroll()
+                            .children(detail),
+                    )
+                    .into_any_element()
+            }
+        }
+    }
+
+    fn render_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.menu.as_ref()?;
+        let colors = cx.theme().colors();
+        let actions = self.menu_actions();
+        let mut children = Vec::new();
+        let mut last_section: Option<Option<SharedString>> = None;
+
+        for (ix, (section, action)) in actions.into_iter().enumerate() {
+            if last_section.as_ref() != Some(&section) {
+                if let Some(title) = &section {
+                    children.push(
+                        div()
+                            .px(Spacing::Medium.pixels())
+                            .pt(Spacing::Small.pixels())
+                            .child(
+                                Label::new(SharedString::from(title.to_uppercase()))
+                                    .size(TextSize::XSmall)
+                                    .color(Color::Disabled),
+                            )
+                            .into_any_element(),
+                    );
+                }
+                last_section = Some(section);
+            }
+            let selected = ix == menu.selected;
+            let color = if action.destructive {
+                Color::Error
+            } else {
+                Color::Default
+            };
+            let shortcut = action.shortcut_label();
+            children.push(
+                div()
+                    .id(("launcher-action", ix))
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::Medium.pixels())
+                    .px(Spacing::Medium.pixels())
+                    .py(px(5.))
+                    .rounded(Radius::Small.pixels())
+                    .cursor_pointer()
+                    .when(selected, |el| el.bg(colors.element_selected))
+                    .when(!selected, |el| el.hover(|s| s.bg(colors.element_hover)))
+                    .children(
+                        action
+                            .icon
+                            .map(|icon| Icon::new(icon).size(IconSize::Small).color(color)),
+                    )
+                    .child(
+                        div().flex_1().min_w(px(0.)).child(
+                            Label::new(action.title.clone())
+                                .size(TextSize::Small)
+                                .color(color)
+                                .truncate(),
+                        ),
+                    )
+                    .children(shortcut.map(|shortcut| {
+                        div()
+                            .px(px(4.))
+                            .py(px(1.))
+                            .rounded(px(3.))
+                            .bg(colors.element_background)
+                            .child(
+                                Label::new(shortcut)
+                                    .size(TextSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                    }))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.run(&action, window, cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+
+        let filter: SharedString = if menu.filter.is_empty() {
+            "Search actions...".into()
+        } else {
+            menu.filter.clone().into()
+        };
+        Some(
+            div()
+                .absolute()
+                .right(Spacing::Large.pixels())
+                .bottom(px(48.))
+                .w(px(300.))
+                .p(Spacing::XSmall.pixels())
+                .rounded(Radius::Large.pixels())
+                .border_1()
+                .border_color(colors.border)
+                .bg(colors.elevated_surface_background)
+                .shadow_lg()
+                .flex()
+                .flex_col()
+                .gap(px(1.))
+                .children(children)
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(1.))
+                        .my(Spacing::XSmall.pixels())
+                        .bg(colors.border_variant),
+                )
+                .child(
+                    div().px(Spacing::Medium.pixels()).py(px(3.)).child(
+                        Label::new(filter)
+                            .size(TextSize::Small)
+                            .color(if menu.filter.is_empty() {
+                                Color::Placeholder
+                            } else {
+                                Color::Default
+                            }),
+                    ),
+                )
+                .into_any_element(),
+        )
+    }
+}
+
+/// Navigation keys, after the launcher's own bindings resolved them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NavKey {
+    Up,
+    Down,
+    Left,
+    Right,
+    Enter,
 }
 
 fn close(window: &mut Window, cx: &mut App) {
@@ -365,104 +1067,39 @@ impl Render for Launcher {
         if !self.focus_handle.is_focused(window) {
             self.focus_handle.focus(window, cx);
         }
+        self.refresh(cx);
 
-        let module_name = self.metas[self.route.module].name;
-        let (body, header, row_height, empty_text, hints) = match self.current() {
-            Some(module) => (
-                module.body(cx),
-                module.render_header(window, cx),
-                module.row_height(cx),
-                module.empty_text(cx),
-                module.footer_hints(self.selected_item(), cx),
-            ),
-            None => (Body::List, None, px(0.), None, None),
-        };
-        let hints = hints.unwrap_or_else(|| {
-            let mut hints: Vec<Hint> = self
-                .selected_item()
-                .map(|item| {
-                    item.actions
-                        .iter()
-                        .zip(["Enter", "Shift Enter"])
-                        .map(|(action, key)| (action.label.clone(), key.into()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            hints.push(("Close".into(), "Esc".into()));
-            hints
-        });
-
-        let body = match body {
-            Body::Custom(custom) => {
-                self.columns = 1;
-                div()
-                    .id("custom-scroll")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.body_scroll)
-                    .child(custom)
-                    .into_any_element()
-            }
-            Body::List | Body::Grid { .. } if self.matches.is_empty() => div()
-                .flex_1()
-                .flex()
-                .items_center()
-                .justify_center()
-                .px(Spacing::XLarge.pixels())
-                .children(
-                    empty_text
-                        .map(|text| Label::new(text).size(TextSize::Small).color(Color::Muted)),
-                )
-                .into_any_element(),
-            Body::List | Body::Grid { .. } => {
-                let columns = match body {
-                    Body::Grid { columns } => columns.max(1),
-                    _ => 1,
-                };
-                self.columns = columns;
-                let rows = self.matches.len().div_ceil(columns);
-                // The list sizes itself from its own style, so it needs a
-                // parent with a definite height.
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .child(
-                        VirtualList::new(
-                            "launcher-list",
-                            rows,
-                            cx.processor(move |this, range: Range<usize>, window, cx| {
-                                range
-                                    .map(|row| {
-                                        this.render_list_row(row, columns, row_height, window, cx)
-                                    })
-                                    .collect::<Vec<_>>()
-                            }),
-                        )
-                        .track_scroll(self.list_scroll.clone())
-                        .size_full(),
-                    )
-                    .into_any_element()
-            }
-        };
+        let chrome = self.body.as_ref().map(Body::chrome);
+        let badge = chrome
+            .and_then(|chrome| chrome.title.clone())
+            .unwrap_or_else(|| self.metas[self.route.module].name.into());
+        let loading = chrome.is_some_and(|chrome| chrome.loading);
+        let header = self
+            .current_page()
+            .cloned()
+            .and_then(|page| page.render_header(window, cx));
+        let dropdown = self
+            .body
+            .as_ref()
+            .and_then(Body::dropdown)
+            .map(|dropdown| row::dropdown_chips(dropdown, cx));
+        let body = self.render_body(cx);
+        let menu = self.render_menu(cx);
 
         div()
             .id("launcher")
             .track_focus(&self.focus_handle)
             .key_context("Launcher")
-            .on_action(cx.listener(|this, _: &Cancel, window, cx| {
-                // First Esc clears the input; the second closes.
-                if this.input.is_empty() {
-                    close(window, cx);
-                } else {
-                    this.edit(cx, InputBuffer::clear);
-                }
-            }))
+            .on_action(cx.listener(|this, _: &Cancel, window, cx| this.cancel(window, cx)))
             .on_action(cx.listener(|this, _: &Confirm, window, cx| {
                 this.navigate(NavKey::Enter, window, cx);
             }))
             .on_action(cx.listener(|this, _: &SecondaryConfirm, window, cx| {
-                this.activate(1, window, cx);
+                if this.menu.is_none() {
+                    this.activate(1, window, cx);
+                }
             }))
+            .on_action(cx.listener(|this, _: &ToggleActions, _, cx| this.toggle_menu(cx)))
             .on_action(cx.listener(|this, _: &CursorUp, window, cx| {
                 this.navigate(NavKey::Up, window, cx);
             }))
@@ -477,9 +1114,7 @@ impl Render for Launcher {
             }))
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.page(false, cx)))
             .on_action(cx.listener(|this, _: &PageDown, _, cx| this.page(true, cx)))
-            .on_action(cx.listener(|this, _: &Backspace, _, cx| {
-                this.edit(cx, InputBuffer::backspace);
-            }))
+            .on_action(cx.listener(|this, _: &Backspace, _, cx| this.backspace(cx)))
             .on_action(cx.listener(|this, _: &DeleteWordBack, _, cx| {
                 this.edit(cx, InputBuffer::delete_word_back);
             }))
@@ -504,9 +1139,13 @@ impl Render for Launcher {
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
                 this.edit(cx, InputBuffer::select_all);
             }))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 let keystroke = &event.keystroke;
-                if keystroke.modifiers.control || keystroke.modifiers.alt {
+                let m = keystroke.modifiers;
+                if m.control || m.alt || m.platform {
+                    if this.run_shortcut(keystroke, window, cx) {
+                        cx.stop_propagation();
+                    }
                     return;
                 }
                 let typed = keystroke.key_char.clone().or_else(|| {
@@ -515,18 +1154,22 @@ impl Render for Launcher {
                 if let Some(text) = typed
                     && !text.chars().any(char::is_control)
                 {
-                    this.edit(cx, |input| input.insert_str(&text));
+                    this.type_text(&text, cx);
                 }
             }))
             .size_full()
+            .relative()
             .child(
                 LauncherFrame::new(render_input_line(&self.input, &self.placeholder(), cx))
-                    .badge(module_name)
-                    .hints(self.prefix_hints())
-                    .actions(footer_hints(hints, cx))
+                    .badge(badge)
+                    .loading(loading)
+                    .hints(self.footer_left())
+                    .actions(footer_hints(self.footer_right(), cx))
                     .children(header)
+                    .children(dropdown)
                     .child(body),
             )
+            .children(menu)
     }
 }
 

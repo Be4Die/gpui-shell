@@ -8,6 +8,8 @@ actions!(
         Confirm,
         // Runs a launcher item's second action
         SecondaryConfirm,
+        // Opens the launcher actions panel
+        ToggleActions,
         // Launcher list navigation
         CursorUp,
         CursorDown,
@@ -35,6 +37,7 @@ pub fn register(cx: &mut App) {
         KeyBinding::new("escape", Cancel, Some("Launcher")),
         KeyBinding::new("enter", Confirm, Some("Launcher")),
         KeyBinding::new("shift-enter", SecondaryConfirm, Some("Launcher")),
+        KeyBinding::new("tab", ToggleActions, Some("Launcher")),
         KeyBinding::new("up", CursorUp, Some("Launcher")),
         KeyBinding::new("down", CursorDown, Some("Launcher")),
         KeyBinding::new("pageup", PageUp, Some("Launcher")),

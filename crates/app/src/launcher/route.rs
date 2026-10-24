@@ -1,6 +1,6 @@
 //! Which module owns the input, and what it searches for.
 
-use super::module::ModuleMeta;
+use super::page::ModuleMeta;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Route {

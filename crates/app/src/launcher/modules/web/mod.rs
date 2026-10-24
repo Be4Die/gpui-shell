@@ -3,18 +3,15 @@
 
 pub mod config;
 
-use std::process::Command;
-
-use gpui::{Context, EventEmitter, IntoElement, Render, Window, div, prelude::*, px, rgba};
+use gpui::{Context, IntoElement, Render, Window, div, prelude::*, px, rgba};
 use ui::{
     ActiveTheme, Color, Icon, IconName, IconSize, Label, LabelCommon, Radius, Spacing, TextSize,
 };
 
 use self::config::{WebConfig, WebProviderConfig};
-use crate::launcher::item::Item;
-use crate::launcher::module::{
-    Body, Hint, Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, NavKey, Outcome,
-};
+use crate::launcher::action::{Action, ActionPanel};
+use crate::launcher::content::{Content, Custom};
+use crate::launcher::page::{LauncherPage, ModuleDescriptor, ModuleMeta};
 
 pub fn descriptor(config: &WebConfig) -> ModuleDescriptor {
     let providers = config.providers.clone();
@@ -63,53 +60,26 @@ impl WebSearchModule {
         default.or((!self.providers.is_empty()).then_some(0))
     }
 
-    fn search(&self) -> bool {
-        let Some(provider) = self.provider.and_then(|ix| self.providers.get(ix)) else {
-            return false;
-        };
-        if self.search.is_empty() {
-            return false;
-        }
-        let url = provider.url.replace("{query}", &url_encode(&self.search));
-        let mut open = Command::new("xdg-open");
-        open.arg(&url);
-        if let Err(err) = services::spawn_reaped(open, "xdg-open") {
-            tracing::warn!("Failed to open {url}: {err}");
-        }
-        true
+    /// The URL the current search opens.
+    fn url(&self) -> Option<String> {
+        let provider = self.providers.get(self.provider?)?;
+        (!self.search.is_empty())
+            .then(|| provider.url.replace("{query}", &url_encode(&self.search)))
     }
 }
 
-impl EventEmitter<ModuleEvent> for WebSearchModule {}
-
-impl LauncherModule for WebSearchModule {
-    fn items(&mut self, query: &str, cx: &mut Context<Self>) -> Items {
+impl LauncherPage for WebSearchModule {
+    fn content(&mut self, query: &str, cx: &mut Context<Self>) -> Content {
         let (provider, search) = self.split(query);
         self.provider = provider;
         self.search = search.to_string();
-        cx.notify();
-        Items::Ready(Vec::new())
-    }
-
-    fn activate(&mut self, _item: &Item, _action: &str, _cx: &mut Context<Self>) -> Outcome {
-        Outcome::Stay
-    }
-
-    fn body(&mut self, cx: &mut Context<Self>) -> Body {
-        Body::Custom(cx.entity().into())
-    }
-
-    fn on_key(&mut self, key: NavKey, _cx: &mut Context<Self>) -> Option<Outcome> {
-        (key == NavKey::Enter && self.search()).then_some(Outcome::Close)
-    }
-
-    fn footer_hints(&self, _selected: Option<&Item>) -> Option<Vec<Hint>> {
-        let mut hints: Vec<Hint> = Vec::new();
-        if !self.search.is_empty() {
-            hints.push(("Search".into(), "Enter".into()));
-        }
-        hints.push(("Close".into(), "Esc".into()));
-        Some(hints)
+        let actions = match (self.url(), provider.and_then(|ix| self.providers.get(ix))) {
+            (Some(url), Some(provider)) => ActionPanel::new()
+                .action(Action::open(url.clone()).title(format!("Search {}", provider.name)))
+                .action(Action::copy(url).title("Copy URL")),
+            _ => ActionPanel::new(),
+        };
+        Custom::new(cx.entity()).actions(actions).into()
     }
 }
 

@@ -2,14 +2,14 @@
 
 pub mod config;
 
-use gpui::{Context, EventEmitter};
+use gpui::Context;
+use services::Application;
 use ui::IconName;
 
 use self::config::AppsConfig;
-use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::module::{
-    Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
-};
+use crate::launcher::action::{Action, ActionPanel, Outcome};
+use crate::launcher::content::{Content, Detail, Item, ItemIcon, List, Metadata};
+use crate::launcher::page::{LauncherPage, ModuleDescriptor, ModuleMeta};
 use crate::state::AppState;
 
 const ICON: IconName = IconName::Layers;
@@ -31,36 +31,82 @@ pub fn descriptor(config: &AppsConfig) -> ModuleDescriptor {
 
 pub struct AppsModule;
 
-impl EventEmitter<ModuleEvent> for AppsModule {}
-
-impl LauncherModule for AppsModule {
-    fn items(&mut self, _query: &str, cx: &mut Context<Self>) -> Items {
+impl LauncherPage for AppsModule {
+    fn content(&mut self, _query: &str, cx: &mut Context<Self>) -> Content {
         let apps = AppState::applications(cx).all();
-        Items::Ready(
-            apps.iter()
-                .enumerate()
-                .map(|(ix, app)| {
-                    let icon = match &app.icon_path {
-                        Some(path) => ItemIcon::Path(path.clone()),
-                        None => ItemIcon::Icon(ICON.into()),
-                    };
-                    let item = Item::new(ix.to_string(), app.name.clone())
-                        .icon(icon)
-                        .action("launch", "Open");
-                    match &app.description {
-                        Some(description) => item.subtitle(description.clone()),
-                        None => item,
-                    }
-                })
-                .collect(),
+        List::new()
+            .items(apps.iter().map(|app| {
+                let icon = match &app.icon_path {
+                    Some(path) => ItemIcon::Path(path.clone()),
+                    None => ICON.into(),
+                };
+                let item = Item::new(
+                    app.desktop_file.to_string_lossy().to_string(),
+                    app.name.clone(),
+                )
+                .icon(icon)
+                .actions(actions(app));
+                match &app.description {
+                    Some(description) => item.subtitle(description.clone()),
+                    None => item,
+                }
+            }))
+            .into()
+    }
+}
+
+fn actions(app: &Application) -> ActionPanel {
+    let launch = app.clone();
+    let shown = app.clone();
+    ActionPanel::new()
+        .action(
+            Action::new("Open", move |_, _| {
+                launch.launch();
+                Outcome::Close
+            })
+            .icon(IconName::ExternalLink),
         )
-    }
+        .action(Action::push_detail("Show Details", move |_| detail(&shown)).shortcut("ctrl-i"))
+        .section(
+            "Copy",
+            [
+                Action::copy(app.exec.clone())
+                    .title("Copy Command")
+                    .shortcut("ctrl-shift-c"),
+                Action::copy(app.desktop_file.to_string_lossy().to_string())
+                    .title("Copy Desktop File Path"),
+            ],
+        )
+}
 
-    fn activate(&mut self, item: &Item, _action: &str, cx: &mut Context<Self>) -> Outcome {
-        let apps = AppState::applications(cx).all();
-        if let Some(app) = item.id.parse::<usize>().ok().and_then(|ix| apps.get(ix)) {
-            app.launch();
-        }
-        Outcome::Close
+fn detail(app: &Application) -> Detail {
+    let mut markdown = String::new();
+    if let Some(path) = &app.icon_path {
+        markdown.push_str(&format!("![icon]({})\n\n", path.display()));
     }
+    markdown.push_str(&format!("# {}\n", app.name));
+    if let Some(description) = &app.description {
+        markdown.push_str(&format!("\n{description}\n"));
+    }
+    let launch = app.clone();
+    let mut detail = Detail::new()
+        .title(app.name.clone())
+        .markdown(markdown)
+        .metadata(Metadata::label("Command", app.exec.clone()))
+        .metadata(Metadata::label(
+            "Desktop file",
+            app.desktop_file.to_string_lossy().to_string(),
+        ))
+        .actions(
+            ActionPanel::new()
+                .action(Action::new("Open", move |_, _| {
+                    launch.launch();
+                    Outcome::Close
+                }))
+                .action(Action::copy(app.exec.clone()).title("Copy Command")),
+        );
+    if let Some(class) = &app.startup_wm_class {
+        detail = detail.metadata(Metadata::label("Window class", class.clone()));
+    }
+    detail
 }

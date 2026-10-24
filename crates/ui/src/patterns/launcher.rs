@@ -3,7 +3,7 @@
 
 use gpui::{AnyElement, App, IntoElement, RenderOnce, SharedString, Window, div, prelude::*, px};
 
-use crate::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize};
+use crate::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, Spinner, TextSize};
 
 /// The launcher surface: query row, body, footer hint bar.
 #[derive(IntoElement)]
@@ -11,6 +11,7 @@ use crate::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextS
 pub struct LauncherFrame {
     query: AnyElement,
     icon: IconName,
+    loading: bool,
     badge: Option<SharedString>,
     hints: Option<SharedString>,
     actions: Option<AnyElement>,
@@ -24,6 +25,7 @@ impl LauncherFrame {
         Self {
             query: query.into_any_element(),
             icon: IconName::MagnifyingGlass,
+            loading: false,
             badge: None,
             hints: None,
             actions: None,
@@ -34,6 +36,12 @@ impl LauncherFrame {
     /// Replace the search icon.
     pub fn icon(mut self, icon: IconName) -> Self {
         self.icon = icon;
+        self
+    }
+
+    /// Spin in place of the search icon.
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
         self
     }
 
@@ -90,11 +98,17 @@ impl RenderOnce for LauncherFrame {
                     .flex()
                     .items_center()
                     .gap(Spacing::Large.pixels())
-                    .child(
+                    .child(if self.loading {
+                        Spinner::new()
+                            .size(IconSize::Medium)
+                            .color(Color::Custom(muted))
+                            .into_any_element()
+                    } else {
                         Icon::new(self.icon)
                             .size(IconSize::Medium)
-                            .color(Color::Custom(muted)),
-                    )
+                            .color(Color::Custom(muted))
+                            .into_any_element()
+                    })
                     .child(
                         div()
                             .flex_1()

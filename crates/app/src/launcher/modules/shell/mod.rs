@@ -4,14 +4,13 @@ pub mod config;
 
 use std::process::Command;
 
-use gpui::{Context, EventEmitter, SharedString};
+use gpui::Context;
 use ui::IconName;
 
 use self::config::ShellConfig;
-use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::module::{
-    Items, LauncherModule, Matching, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
-};
+use crate::launcher::action::{Action, Outcome};
+use crate::launcher::content::{Content, EmptyView, Item, List};
+use crate::launcher::page::{LauncherPage, ModuleDescriptor, ModuleMeta};
 
 const ICON: IconName = IconName::SquareTerminal;
 
@@ -52,48 +51,47 @@ pub struct ShellModule {
     terminal: String,
 }
 
-impl EventEmitter<ModuleEvent> for ShellModule {}
-
-impl LauncherModule for ShellModule {
-    fn matching(&self) -> Matching {
-        Matching::Module
-    }
-
-    fn items(&mut self, query: &str, _cx: &mut Context<Self>) -> Items {
-        let command = query.trim();
+impl LauncherPage for ShellModule {
+    fn content(&mut self, query: &str, _cx: &mut Context<Self>) -> Content {
+        let list = List::new().filtering(false).empty(
+            EmptyView::new("Type a command to run")
+                .description("e.g. htop or cargo build")
+                .icon(ICON),
+        );
+        let command = query.trim().to_string();
         if command.is_empty() {
-            return Items::Ready(Vec::new());
+            return list.into();
         }
         let terminal = if self.terminal.is_empty() {
             "your terminal"
         } else {
             &self.terminal
         };
-        Items::Ready(vec![
-            Item::new("run", command.to_string())
+
+        let in_terminal = (command.clone(), self.terminal.clone());
+        let in_background = command.clone();
+        list.item(
+            Item::new("run", command.clone())
                 .subtitle(format!("Run in {terminal}"))
-                .icon(ItemIcon::Icon(ICON.into()))
-                .action("terminal", "Run")
-                .action("background", "Run in background"),
-        ])
-    }
-
-    fn activate(&mut self, item: &Item, action: &str, _cx: &mut Context<Self>) -> Outcome {
-        let command = item.title.to_string();
-        if action == "background" {
-            let mut sh = Command::new("sh");
-            sh.args(["-c", &command]);
-            if let Err(err) = services::spawn_reaped(sh, command.clone()) {
-                tracing::warn!("Failed to run `{command}`: {err}");
-            }
-        } else {
-            run_in_terminal(command, self.terminal.clone());
-        }
-        Outcome::Close
-    }
-
-    fn empty_text(&self) -> Option<SharedString> {
-        Some("Type a command to run, e.g. htop or cargo build".into())
+                .icon(ICON)
+                .action(
+                    Action::new("Run", move |_, _| {
+                        run_in_terminal(in_terminal.0.clone(), in_terminal.1.clone());
+                        Outcome::Close
+                    })
+                    .icon(IconName::Terminal),
+                )
+                .action(Action::new("Run in Background", move |_, _| {
+                    let mut sh = Command::new("sh");
+                    sh.args(["-c", &in_background]);
+                    if let Err(err) = services::spawn_reaped(sh, in_background.clone()) {
+                        tracing::warn!("Failed to run `{in_background}`: {err}");
+                    }
+                    Outcome::Close
+                }))
+                .action(Action::copy(command).title("Copy Command")),
+        )
+        .into()
     }
 }
 

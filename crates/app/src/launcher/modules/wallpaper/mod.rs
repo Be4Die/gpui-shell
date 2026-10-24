@@ -7,10 +7,7 @@ pub mod config;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use gpui::{
-    AnyElement, App, Context, EntityId, EventEmitter, Global, Hsla, ObjectFit, Pixels,
-    SharedString, Window, div, img, prelude::*, px, size,
-};
+use gpui::{AnyElement, App, Context, Global, Hsla, SharedString, Window, div, prelude::*, px};
 use services::WallpaperCommand;
 use ui::{
     ActiveTheme, Base16Palette, Color, Icon, IconName, IconSize, Label, LabelCommon, Radius,
@@ -18,21 +15,16 @@ use ui::{
 };
 
 use self::config::WallpaperConfig;
-use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::module::{
-    Body, Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
-    list_row_height,
-};
+use crate::launcher::action::{Action, Outcome};
+use crate::launcher::content::{Content, EmptyView, Grid, Item, ItemIcon};
 use crate::launcher::modules::theme::{apply_palette, palette_is_active};
-use crate::launcher::row::thumbnail_image;
+use crate::launcher::page::{LauncherPage, ModuleDescriptor, ModuleMeta};
 use crate::state::AppState;
 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
-/// Thumbnail height in a card; the width follows the column.
-const THUMB_HEIGHT: Pixels = px(100.);
-/// Widest a card gets in the default window, for sizing the thumbnail.
-const THUMB_WIDTH: Pixels = px(190.);
+/// Width over height of a thumbnail.
+const THUMB_ASPECT_RATIO: f32 = 1.9;
 
 pub fn descriptor(config: &WallpaperConfig) -> ModuleDescriptor {
     let config = config.clone();
@@ -105,8 +97,6 @@ pub struct WallpaperModule {
     columns: usize,
     matugen: bool,
     matugen_scheme: String,
-    /// Thumbnail loads notify this module, which redraws the launcher.
-    owner: EntityId,
 }
 
 impl WallpaperModule {
@@ -120,7 +110,7 @@ impl WallpaperModule {
             this.update(cx, |this, cx| {
                 this.entries = entries;
                 this.scanning = false;
-                cx.emit(ModuleEvent::ItemsChanged);
+                cx.notify();
             })
             .ok();
         })
@@ -137,7 +127,6 @@ impl WallpaperModule {
             columns: config.columns.max(1),
             matugen: config.matugen,
             matugen_scheme: config.matugen_scheme.clone(),
-            owner: cx.entity_id(),
         }
     }
 
@@ -225,96 +214,43 @@ fn palette_chip(
         })
 }
 
-impl EventEmitter<ModuleEvent> for WallpaperModule {}
-
-impl LauncherModule for WallpaperModule {
-    fn items(&mut self, _query: &str, _cx: &mut Context<Self>) -> Items {
-        Items::Ready(
-            self.entries
-                .iter()
-                .map(|entry| {
-                    Item::new(entry.path.to_string_lossy().to_string(), entry.name.clone())
-                        .subtitle(entry.extension.clone())
-                        .icon(ItemIcon::Thumbnail {
-                            path: entry.path.clone(),
-                            mtime: entry.mtime,
-                        })
-                        .action("apply", "Apply")
-                })
-                .collect(),
-        )
-    }
-
-    fn activate(&mut self, item: &Item, _action: &str, cx: &mut Context<Self>) -> Outcome {
-        self.apply(PathBuf::from(item.id.as_ref()), item.title.clone(), cx);
-        Outcome::Stay
-    }
-
-    fn body(&mut self, _cx: &mut Context<Self>) -> Body {
-        Body::Grid {
-            columns: self.columns,
-        }
-    }
-
-    fn row_height(&self, cx: &App) -> Pixels {
-        THUMB_HEIGHT + list_row_height(cx, &[TextSize::Small], px(0.)) + Spacing::Medium.pixels()
-    }
-
-    fn render_row(
-        &self,
-        item: &Item,
-        selected: bool,
-        window: &Window,
-        cx: &App,
-    ) -> Option<AnyElement> {
-        let ItemIcon::Thumbnail { path, mtime } = &item.icon else {
-            return None;
+impl LauncherPage for WallpaperModule {
+    fn content(&mut self, _query: &str, cx: &mut Context<Self>) -> Content {
+        let dir = self.directory.display().to_string();
+        let empty = if self.scanning {
+            EmptyView::new(format!("Scanning {dir}…"))
+        } else {
+            EmptyView::new(format!("No images in {dir}")).icon(IconName::Image)
         };
-        let colors = cx.theme().colors();
-        let image = thumbnail_image(
-            path,
-            *mtime,
-            size(THUMB_WIDTH, THUMB_HEIGHT),
-            self.owner,
-            window,
-            cx,
-        );
-
-        Some(
-            div()
-                .size_full()
-                .p(Spacing::XSmall.pixels())
-                .rounded(Radius::Medium.pixels())
-                .border_1()
-                .border_color(if selected {
-                    colors.accent
-                } else {
-                    gpui::transparent_black()
-                })
-                .when(selected, |el| el.bg(colors.element_selected))
-                .when(!selected, |el| el.hover(|s| s.bg(colors.element_hover)))
-                .cursor_pointer()
-                .flex()
-                .flex_col()
-                .gap(Spacing::XSmall.pixels())
-                .child(
-                    div()
-                        .w_full()
-                        .h(THUMB_HEIGHT)
-                        .rounded(Radius::Small.pixels())
-                        .overflow_hidden()
-                        .bg(colors.element_background)
-                        .children(
-                            image.map(|image| img(image).size_full().object_fit(ObjectFit::Cover)),
-                        ),
-                )
-                .child(
-                    Label::new(item.title.clone())
-                        .size(TextSize::Small)
-                        .truncate(),
-                )
-                .into_any_element(),
-        )
+        Grid::new(self.columns)
+            .aspect_ratio(THUMB_ASPECT_RATIO)
+            .loading(self.scanning)
+            .empty(empty)
+            .items(self.entries.iter().map(|entry| {
+                let path = entry.path.clone();
+                let name: SharedString = entry.name.clone().into();
+                let location = entry.path.to_string_lossy().to_string();
+                Item::new(location.clone(), name.clone())
+                    .keywords(entry.extension.clone())
+                    .icon(ItemIcon::Thumbnail {
+                        path: entry.path.clone(),
+                        mtime: entry.mtime,
+                    })
+                    .action(
+                        Action::listener("Set Wallpaper", cx, move |this, _, cx| {
+                            this.apply(path.clone(), name.clone(), cx);
+                            Outcome::Stay
+                        })
+                        .icon(IconName::Image),
+                    )
+                    .action(Action::open(location.clone()).title("Open in Viewer"))
+                    .action(
+                        Action::copy(location)
+                            .title("Copy Path")
+                            .shortcut("ctrl-shift-c"),
+                    )
+            }))
+            .into()
     }
 
     fn render_header(
@@ -398,15 +334,6 @@ impl LauncherModule for WallpaperModule {
                 .children(chips)
                 .into_any_element(),
         )
-    }
-
-    fn empty_text(&self) -> Option<SharedString> {
-        let dir = self.directory.display();
-        Some(if self.scanning {
-            format!("Scanning {dir}…").into()
-        } else {
-            format!("No images in {dir}").into()
-        })
     }
 }
 
