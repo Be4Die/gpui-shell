@@ -483,10 +483,7 @@ impl Dock {
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, _event, _window, cx| {
-                    if let Some(item) = this
-                        .items(cx)
-                        .into_iter()
-                        .find(|item| item.key == item_key)
+                    if let Some(item) = this.items(cx).into_iter().find(|item| item.key == item_key)
                     {
                         this.activate(&item, cx);
                     }

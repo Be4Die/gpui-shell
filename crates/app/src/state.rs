@@ -93,6 +93,7 @@ pub(crate) struct Services {
     pub audio: services::AudioSubscriber,
     pub bluetooth: services::BluetoothSubscriber,
     pub brightness: services::BrightnessSubscriber,
+    pub clipboard: services::ClipboardSubscriber,
     pub compositor: services::CompositorSubscriber,
     pub mpris: services::MprisSubscriber,
     pub network: services::NetworkSubscriber,
@@ -109,7 +110,7 @@ impl Services {
     ///
     /// NOTE: keep in sync with the struct above - a new field is not added
     /// here automatically.
-    pub(crate) fn managed(&self) -> [&dyn ManagedService; 12] {
+    pub(crate) fn managed(&self) -> [&dyn ManagedService; 13] {
         [
             &self.audio,
             &self.network,
@@ -122,6 +123,7 @@ impl Services {
             &self.privacy,
             &self.wallpaper,
             &self.brightness,
+            &self.clipboard,
             &self.compositor,
         ]
     }
@@ -139,6 +141,7 @@ pub(crate) async fn init_services() -> anyhow::Result<Services> {
         audio: services::AudioSubscriber::new(),
         bluetooth: services::BluetoothSubscriber::new(),
         brightness: services::BrightnessSubscriber::new(),
+        clipboard: services::ClipboardSubscriber::new(),
         compositor,
         mpris: services::MprisSubscriber::new(),
         network: services::NetworkSubscriber::new(),
@@ -223,7 +226,7 @@ impl AppState {
     }
 
     /// Every service, for the launcher's services view.
-    pub fn managed_services(cx: &App) -> [&dyn ManagedService; 12] {
+    pub fn managed_services(cx: &App) -> [&dyn ManagedService; 13] {
         Self::services(cx).managed()
     }
 
@@ -260,6 +263,13 @@ impl AppState {
     #[inline(always)]
     pub fn brightness(cx: &App) -> &services::BrightnessSubscriber {
         let service = &Self::services(cx).brightness;
+        service.ensure_started();
+        service
+    }
+
+    #[inline(always)]
+    pub fn clipboard(cx: &App) -> &services::ClipboardSubscriber {
+        let service = &Self::services(cx).clipboard;
         service.ensure_started();
         service
     }

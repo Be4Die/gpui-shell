@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::modules::{
-    apps::config::AppsConfig, calculator::config::CalculatorConfig, help::config::HelpConfig,
-    services::config::ServicesConfig, shell::config::ShellConfig, theme::config::ThemesConfig,
-    wallpaper::config::WallpaperConfig, web::config::WebConfig,
-    workspaces::config::WorkspacesConfig,
+    apps::config::AppsConfig, calculator::config::CalculatorConfig,
+    clipboard::config::ClipboardConfig, help::config::HelpConfig, services::config::ServicesConfig,
+    shell::config::ShellConfig, theme::config::ThemesConfig, wallpaper::config::WallpaperConfig,
+    web::config::WebConfig, workspaces::config::WorkspacesConfig,
 };
 
 /// Launcher window configuration.
@@ -48,5 +48,6 @@ pub struct ModulesConfig {
     pub themes: ThemesConfig,
     pub services: ServicesConfig,
     pub calculator: CalculatorConfig,
+    pub clipboard: ClipboardConfig,
     pub help: HelpConfig,
 }

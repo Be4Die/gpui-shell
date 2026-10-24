@@ -16,6 +16,7 @@
   pkg-config,
   rustToolchain,
   matugen,
+  wl-clipboard,
   cargo-flamegraph,
   perf,
   heaptrack,
@@ -41,6 +42,7 @@ mkShell rec {
 
     rustToolchain
     matugen
+    wl-clipboard
 
     # Prompts in scripts/ (flamegraph.sh, heaptrack.sh, release.sh).
     gum

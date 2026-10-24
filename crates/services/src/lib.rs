@@ -8,6 +8,7 @@ pub mod audio;
 pub mod bluetooth;
 pub mod brightness;
 pub mod bus;
+pub mod clipboard;
 pub mod compositor;
 pub mod core;
 pub mod jobs;
@@ -33,6 +34,7 @@ pub use bluetooth::{
     BluetoothCommand, BluetoothData, BluetoothDevice, BluetoothState, BluetoothSubscriber,
 };
 pub use brightness::{BrightnessCommand, BrightnessData, BrightnessSubscriber};
+pub use clipboard::{ClipContent, ClipEntry, ClipboardCommand, ClipboardData, ClipboardSubscriber};
 pub use compositor::{
     ActiveWindow, CompositorBackend, CompositorCommand, CompositorState, CompositorSubscriber,
     Monitor, Window, WindowGeometry, Workspace,

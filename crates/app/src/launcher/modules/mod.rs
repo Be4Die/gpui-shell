@@ -3,6 +3,7 @@
 
 pub mod apps;
 pub mod calculator;
+pub mod clipboard;
 pub mod help;
 pub mod services;
 pub mod shell;
@@ -26,6 +27,7 @@ pub fn registry(config: &ModulesConfig) -> Vec<ModuleDescriptor> {
         theme::descriptor(&config.themes),
         services::descriptor(&config.services),
         calculator::descriptor(&config.calculator),
+        clipboard::descriptor(&config.clipboard),
     ];
     let listed = modules.iter().map(|module| module.meta.clone()).collect();
     modules.push(help::descriptor(&config.help, listed));
