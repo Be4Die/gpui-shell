@@ -55,7 +55,7 @@ _Goal: make outside contributions safe and pleasant before asking for them._
       [adding a bar module](docs/src/content/docs/developer/unstable/bar-module.md)
       and [adding a launcher view](docs/src/content/docs/developer/unstable/launcher-view.md).
       They get rewritten once the module APIs settle (v0.4).
-- [ ] Issue templates: add a "compositor + version" field to the bug report.
+- [x] Issue templates: add a "compositor + version" field to the bug report.
 
 ## v0.3: Reliability
 
