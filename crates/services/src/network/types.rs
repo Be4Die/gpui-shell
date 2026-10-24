@@ -272,6 +272,8 @@ pub enum NetworkCommand {
     },
     /// Disconnect the active WiFi connection by SSID.
     Disconnect(String),
+    /// Delete every saved profile for this SSID.
+    Forget(String),
     /// Forget the last connect's outcome, e.g. when its prompt closes.
     DismissWifiAttempt,
     /// Activate a saved VPN profile by its settings path.
@@ -295,6 +297,7 @@ impl std::fmt::Debug for NetworkCommand {
                 .field("password", &password.as_ref().map(|_| "<redacted>"))
                 .finish(),
             Self::Disconnect(ssid) => f.debug_tuple("Disconnect").field(ssid).finish(),
+            Self::Forget(ssid) => f.debug_tuple("Forget").field(ssid).finish(),
             Self::DismissWifiAttempt => f.write_str("DismissWifiAttempt"),
             Self::ConnectVpn(path) => f.debug_tuple("ConnectVpn").field(path).finish(),
             Self::DisconnectVpn(path) => f.debug_tuple("DisconnectVpn").field(path).finish(),

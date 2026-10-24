@@ -289,6 +289,11 @@ impl WifiSection {
             let ssid = ap.ssid.clone();
             move |_: &mut App| service.dispatch(NetworkCommand::Disconnect(ssid.clone()))
         };
+        let forget = {
+            let service = AppState::network(cx).clone();
+            let ssid = ap.ssid.clone();
+            move |_: &mut App| service.dispatch(NetworkCommand::Forget(ssid.clone()))
+        };
 
         list::row(format!("wifi-{index}"), connected, cx)
             .when(!connected && !connecting, |el| {
@@ -342,6 +347,16 @@ impl WifiSection {
                     IconName::ChevronRight,
                     text_muted,
                     "Connect",
+                ))
+            })
+            .when(known && !connecting, |el| {
+                el.child(list::action_button(
+                    format!("wifi-forget-{index}"),
+                    IconName::Trash,
+                    text_muted,
+                    "Forget network",
+                    forget,
+                    cx,
                 ))
             })
             .when(connected, |el| {

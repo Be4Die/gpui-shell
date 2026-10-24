@@ -222,7 +222,7 @@ impl<'a> NetworkManager<'a> {
                         .and_then(|v| <Vec<u8>>::try_from(v.clone()).ok())
                         .and_then(|bytes| String::from_utf8(bytes).ok())
                     {
-                        profiles.wifi.insert(ssid, path);
+                        profiles.wifi.entry(ssid).or_default().push(path);
                     }
                 }
                 Some("vpn" | "wireguard") => {
@@ -293,7 +293,7 @@ impl<'a> NetworkManager<'a> {
         password: Option<String>,
     ) -> Result<Activation> {
         let saved = self.saved_profiles().await?.wifi;
-        let existing = saved.get(ssid).cloned();
+        let existing = saved.get(ssid).and_then(|paths| paths.first()).cloned();
 
         let aps = self.access_points(&saved).await?;
         let ap = aps
@@ -314,6 +314,7 @@ impl<'a> NetworkManager<'a> {
             return Ok(Activation {
                 active,
                 device: ap.device_path.clone(),
+                profile,
                 created: None,
             });
         }
@@ -347,6 +348,7 @@ impl<'a> NetworkManager<'a> {
         Ok(Activation {
             active,
             device: ap.device_path.clone(),
+            profile: profile.clone(),
             created: Some(profile),
         })
     }
@@ -382,6 +384,18 @@ impl<'a> NetworkManager<'a> {
             .await?
             .delete()
             .await?;
+        Ok(())
+    }
+
+    /// Delete every saved profile for `ssid`, disconnecting it if active.
+    pub async fn forget_wifi(&self, ssid: &str) -> Result<()> {
+        let mut saved = self.saved_profiles().await?.wifi;
+        let profiles = saved
+            .remove(ssid)
+            .ok_or_else(|| anyhow::anyhow!("No saved network '{ssid}'"))?;
+        for profile in &profiles {
+            self.delete_profile(profile).await?;
+        }
         Ok(())
     }
 
@@ -423,7 +437,7 @@ impl<'a> NetworkManager<'a> {
     /// Visible access points, `known` when `saved` has a profile for them.
     async fn access_points(
         &self,
-        saved: &HashMap<String, OwnedObjectPath>,
+        saved: &HashMap<String, Vec<OwnedObjectPath>>,
     ) -> Result<Vec<AccessPoint>> {
         let wireless_devices = self.wireless_devices().await?;
         let mut all_access_points = Vec::new();
@@ -499,8 +513,8 @@ impl<'a> NetworkManager<'a> {
 /// Saved profiles split by what the shell does with them.
 #[derive(Debug, Default)]
 pub struct SavedProfiles {
-    /// WiFi profile path by SSID.
-    pub wifi: HashMap<String, OwnedObjectPath>,
+    /// WiFi profile paths by SSID; duplicates are possible.
+    pub wifi: HashMap<String, Vec<OwnedObjectPath>>,
     /// VPN and WireGuard profiles as (name, path).
     pub vpn: Vec<(String, OwnedObjectPath)>,
 }
@@ -510,6 +524,8 @@ pub struct SavedProfiles {
 pub struct Activation {
     pub active: OwnedObjectPath,
     pub device: ObjectPath<'static>,
+    /// The profile being activated.
+    pub profile: OwnedObjectPath,
     /// The profile this attempt created, to drop again if it fails.
     pub created: Option<OwnedObjectPath>,
 }
@@ -519,9 +535,30 @@ const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 const ACTIVE_STATE_ACTIVATED: u32 = 2;
 const ACTIVE_STATE_DEACTIVATED: u32 = 4;
+const DEVICE_STATE_DISCONNECTED: u32 = 30;
+const DEVICE_STATE_ACTIVATED: u32 = 100;
+const DEVICE_STATE_DEACTIVATING: u32 = 110;
 const DEVICE_STATE_FAILED: u32 = 120;
+/// PREPARE through SECONDARIES: the device is still working on it.
+const DEVICE_STATES_ACTIVATING: std::ops::RangeInclusive<u32> = 40..=90;
+/// How long a device that dropped our activation may sit disconnected
+/// before NM (autoconnect, a retry) picks the profile up again.
+const RETRY_GRACE: Duration = Duration::from_secs(5);
+
+/// Where the device stands once our active connection is gone.
+enum Settle {
+    Done(std::result::Result<(), WifiAttemptStatus>),
+    /// Still activating or tearing down.
+    Busy,
+    /// Disconnected or failed; it may still retry within [`RETRY_GRACE`].
+    Idle,
+}
 
 /// Wait until `activation` is up, or say why it failed.
+///
+/// NM may retire the active connection it returned and carry on with a new
+/// one on the same device (reported as DEVICE_DISCONNECTED), so once it goes
+/// the device decides: up on our profile, or failed.
 pub async fn await_activation(
     conn: &zbus::Connection,
     activation: &Activation,
@@ -538,6 +575,7 @@ pub async fn await_activation(
     let device = DeviceProxy::builder(conn)
         .path(&activation.device)
         .map_err(|e| failed(&e))?
+        .cache_properties(CacheProperties::No)
         .build()
         .await
         .map_err(|e| failed(&e))?;
@@ -550,14 +588,43 @@ pub async fn await_activation(
         .await
         .map_err(|e| failed(&e))?;
 
-    // Subscribed first, so a change from here on is not missed.
-    match active.state().await {
-        Ok(ACTIVE_STATE_ACTIVATED) => return Ok(()),
-        Ok(ACTIVE_STATE_DEACTIVATED) | Err(_) => {
-            return Err(WifiAttemptStatus::Failed("Connection failed".into()));
+    // Whether the device ended up on our profile.
+    let on_profile = async || -> bool {
+        let Ok(path) = device.active_connection().await else {
+            return false;
+        };
+        let Ok(active) = ActiveConnectionProxy::builder(conn)
+            .path(path)
+            .map(|b| b.cache_properties(CacheProperties::No))
+        else {
+            return false;
+        };
+        match active.build().await {
+            Ok(active) => active.connection_().await.ok() == Some(activation.profile.clone()),
+            Err(_) => false,
         }
-        Ok(_) => {}
-    }
+    };
+    // Where the device stands once our active connection is gone.
+    let settle = async |state: u32, active_reason: u32, device_reason: Option<u32>| match state {
+        DEVICE_STATE_ACTIVATED if on_profile().await => Settle::Done(Ok(())),
+        DEVICE_STATE_ACTIVATED => Settle::Done(Err(WifiAttemptStatus::Failed(
+            "Connected to another network".into(),
+        ))),
+        s if DEVICE_STATES_ACTIVATING.contains(&s) || s == DEVICE_STATE_DEACTIVATING => {
+            Settle::Busy
+        }
+        DEVICE_STATE_DISCONNECTED | DEVICE_STATE_FAILED => {
+            match failure(active_reason, device_reason) {
+                // A rejected key is final; anything else may be retried.
+                WifiAttemptStatus::NeedsPassword => {
+                    Settle::Done(Err(WifiAttemptStatus::NeedsPassword))
+                }
+                _ => Settle::Idle,
+            }
+        }
+        // UNAVAILABLE, UNMANAGED: e.g. WiFi turned off.
+        _ => Settle::Done(Err(failure(active_reason, device_reason))),
+    };
 
     enum Change {
         Active { state: u32, reason: u32 },
@@ -583,30 +650,81 @@ pub async fn await_activation(
         // The device says why authentication failed; the active connection
         // often only reports that it went away.
         let mut device_reason = None;
-        while let Some(change) = changes.next().await {
+        // Set once our active connection is gone: the device decides.
+        let mut active_reason = None;
+        // While the device sits disconnected, how long it has to try again.
+        let mut retry_deadline: Option<tokio::time::Instant> = None;
+
+        // Subscribed first, so a change from here on is not missed.
+        let mut next_state = match active.state().await {
+            Ok(ACTIVE_STATE_ACTIVATED) => return Ok(()),
+            Ok(ACTIVE_STATE_DEACTIVATED) | Err(_) => {
+                active_reason = Some(0);
+                device.state().await.ok()
+            }
+            Ok(_) => None,
+        };
+
+        loop {
+            if let (Some(state), Some(reason)) = (next_state.take(), active_reason) {
+                match settle(state, reason, device_reason).await {
+                    Settle::Done(outcome) => return outcome,
+                    Settle::Busy => retry_deadline = None,
+                    Settle::Idle => {
+                        retry_deadline.get_or_insert(tokio::time::Instant::now() + RETRY_GRACE);
+                    }
+                }
+            }
+
+            let change = match retry_deadline {
+                Some(deadline) => match tokio::time::timeout_at(deadline, changes.next()).await {
+                    Ok(change) => change,
+                    Err(_) => return Err(failure(active_reason.unwrap_or(0), device_reason)),
+                },
+                None => changes.next().await,
+            };
+            let Some(change) = change else {
+                return Err(WifiAttemptStatus::Failed("NetworkManager went away".into()));
+            };
+
             match change {
-                Change::Device {
-                    state: DEVICE_STATE_FAILED,
-                    reason,
-                } => device_reason = Some(reason),
-                Change::Device { .. } => {}
-                Change::Active {
-                    state: ACTIVE_STATE_ACTIVATED,
-                    ..
-                } => return Ok(()),
-                Change::Active {
-                    state: ACTIVE_STATE_DEACTIVATED,
-                    reason,
-                } => return Err(failure(reason, device_reason)),
-                Change::Active { .. } => {}
+                Change::Active { state, reason } => {
+                    debug!("Active connection state {state} (reason {reason})");
+                    match state {
+                        ACTIVE_STATE_ACTIVATED => return Ok(()),
+                        ACTIVE_STATE_DEACTIVATED => {
+                            active_reason = Some(reason);
+                            next_state = device.state().await.ok();
+                        }
+                        _ => {}
+                    }
+                }
+                Change::Device { state, reason } => {
+                    debug!("WiFi device state {state} (reason {reason})");
+                    // NEED_AUTH can end in DISCONNECTED with NO_SECRETS, not FAILED.
+                    if (state == DEVICE_STATE_FAILED || state == DEVICE_STATE_DISCONNECTED)
+                        && reason > 1
+                    {
+                        device_reason = Some(reason);
+                    }
+                    next_state = Some(state);
+                }
             }
         }
-        Err(WifiAttemptStatus::Failed("NetworkManager went away".into()))
     };
 
-    tokio::time::timeout(ACTIVATION_TIMEOUT, wait)
-        .await
-        .unwrap_or_else(|_| Err(WifiAttemptStatus::Failed("Timed out".into())))
+    match tokio::time::timeout(ACTIVATION_TIMEOUT, wait).await {
+        Ok(outcome) => outcome,
+        Err(_) => {
+            // Stop it, so it does not finish behind a "timed out".
+            if let Ok(nm) = NetworkManagerProxy::new(conn).await
+                && let Err(e) = nm.deactivate_connection(&activation.active).await
+            {
+                debug!("Could not stop timed-out activation: {e}");
+            }
+            Err(WifiAttemptStatus::Failed("Timed out".into()))
+        }
+    }
 }
 
 /// Map `NMActiveConnectionStateReason` and the device's
@@ -619,6 +737,7 @@ fn failure(active_reason: u32, device_reason: Option<u32>) -> WifiAttemptStatus 
         // rejected key shows up during the handshake.
         (_, Some(7 | 8 | 11)) => WifiAttemptStatus::NeedsPassword,
         (2, _) => WifiAttemptStatus::Failed("Cancelled".into()),
+        (3, _) => WifiAttemptStatus::Failed("Disconnected while connecting".into()),
         (6, _) => WifiAttemptStatus::Failed("Timed out".into()),
         (reason, _) => WifiAttemptStatus::Failed(format!("Connection failed (reason {reason})")),
     }

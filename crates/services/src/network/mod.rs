@@ -116,6 +116,19 @@ impl NetworkSubscriber {
                 debug!("Disconnecting: {}", ssid);
                 nm.disconnect_by_ssid(&ssid).await?;
             }
+            NetworkCommand::Forget(ssid) => {
+                debug!("Forgetting: {}", ssid);
+                nm.forget_wifi(&ssid).await?;
+                // Its last failure was about the profile just deleted.
+                let mut data = self.data.lock_mut();
+                if data
+                    .wifi_attempt
+                    .as_ref()
+                    .is_some_and(|a| a.ssid == ssid && a.status != WifiAttemptStatus::Connecting)
+                {
+                    data.wifi_attempt = None;
+                }
+            }
             NetworkCommand::DismissWifiAttempt => {
                 self.attempt_generation.fetch_add(1, Ordering::Relaxed);
                 self.data.lock_mut().wifi_attempt = None;

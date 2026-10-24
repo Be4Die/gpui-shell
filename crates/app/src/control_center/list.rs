@@ -154,7 +154,11 @@ pub fn action_button(
         .cursor_pointer()
         .hover(move |s| s.bg(hover_bg))
         .tooltip(control_center_tooltip(tooltip))
-        .on_mouse_down(MouseButton::Left, move |_, _, cx| on_click(cx))
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            // The row under it has its own click.
+            cx.stop_propagation();
+            on_click(cx)
+        })
         .child(
             Icon::new(icon)
                 .size(IconSize::XSmall)
