@@ -16,7 +16,7 @@ use gpui::{AnyElement, App, Context, Render, Size, Window, div, img, prelude::*,
 use std::collections::HashMap;
 use ui::{ActiveTheme, Radius, Spacing, TextSize};
 
-use crate::config::{ActiveConfig, State};
+use crate::config::{ActiveConfig, ConfigSignals, State};
 use crate::state::{AppState, display_id_for_window, watch};
 use item::{DockItem, build_dock_items};
 use placement::*;
@@ -186,6 +186,10 @@ impl Dock {
             this.state = new_state;
             cx.notify();
         });
+        let signals = ConfigSignals::global(cx);
+        let (dock, pinned) = (signals.dock.signal_cloned(), signals.pinned.signal_cloned());
+        watch(cx, dock, |_, _, cx| cx.notify());
+        watch(cx, pinned, |_, _, cx| cx.notify());
 
         Self {
             compositor,

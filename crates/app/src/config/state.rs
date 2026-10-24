@@ -15,7 +15,7 @@ use gpui::{App, Global};
 use serde::{Deserialize, Serialize};
 use services::ServiceMode;
 
-use super::ActiveConfig;
+use super::{ActiveConfig, ConfigSignals};
 use super::persistence::{config_dir, parse_toml, write_toml};
 
 /// State written by the shell itself.
@@ -55,6 +55,7 @@ impl State {
     pub fn set_pinned(pinned: Vec<String>, cx: &mut App) {
         cx.global_mut::<Self>().pinned = Some(pinned);
         Self::save(cx);
+        ConfigSignals::publish(cx);
     }
 
     /// Startup mode for a service: what the UI last saved, else what

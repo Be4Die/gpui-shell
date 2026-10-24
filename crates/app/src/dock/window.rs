@@ -4,7 +4,10 @@ use gpui::{
 };
 use ui::Spacing;
 
-use crate::config::{ActiveConfig, Config, State};
+use futures::StreamExt;
+use futures_signals::signal::SignalExt;
+
+use crate::config::{ActiveConfig, ConfigSignals, State};
 use crate::state::{AppState, record_window_display};
 
 use super::{Dock, DockMonitors, dock_item_count, dock_window_size, monitor_name_for_display};
@@ -124,25 +127,26 @@ pub fn reload(cx: &mut App) {
 }
 
 pub fn init(cx: &mut App) {
-    cx.observe_global::<Config>(|cx| {
-        tracing::info!("Config changed; reloading dock windows");
-        reload(cx);
-    })
-    .detach();
-
-    cx.observe_global::<State>(|cx| {
-        tracing::info!("Pins changed; reloading dock windows");
-        reload(cx);
-    })
-    .detach();
+    // Only the layer-shell anchor and the monitor set need new windows; size,
+    // pins and the rest are applied by `Dock::render`.
+    let layout = ConfigSignals::global(cx)
+        .dock
+        .signal_ref(|dock| (dock.position, dock.monitors))
+        .dedupe()
+        .to_stream();
 
     cx.spawn(async move |cx| {
         cx.background_executor()
             .timer(std::time::Duration::from_millis(100))
             .await;
 
+        let mut layout = layout.skip(1);
         tracing::info!("Dock opened");
-        cx.update(open_all)
+        cx.update(open_all);
+        while layout.next().await.is_some() {
+            tracing::info!("Dock layout changed; reopening dock windows");
+            cx.update(reload);
+        }
     })
     .detach();
 }
