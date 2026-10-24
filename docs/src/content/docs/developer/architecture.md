@@ -43,7 +43,7 @@ Every service works the same way (the strip at the bottom of the diagram):
   `start()` gets a fresh `RunToken`; the run, and its command worker, end
   the moment it is stopped or restarted (`token.run_until_cancelled`), not at
   the next event. Startup mode per service is `eager`, `lazy` or
-  `off` (`[services]` in config), and the `;s` launcher view controls them
+  `off` (`[services]` in config), and the `;s` launcher module controls them
   at runtime.
 
 The compositor is the exception: it connects at startup, can't be stopped,
@@ -66,7 +66,7 @@ Windows are matched to compositor monitors by output name
 ## Config and IPC
 
 - The shell never writes `config.toml`. What it persists goes to
-  `state.toml`, which overrides config. The theme view also saves
+  `state.toml`, which overrides config. The theme module also saves
   `theme.toml`.
 - Both files hot-reload. A broken file keeps the last good value and raises a
   notification, and `gpuishell --validate` shows the error.
@@ -77,8 +77,8 @@ Windows are matched to compositor monitors by output name
 
 - **Bar module:** a directory in `app/src/bar/modules/`, registered in
   `modules/registry.rs`.
-- **Launcher view:** a directory in `app/src/launcher/views/` implementing
-  `LauncherView`, registered in `views/mod.rs`.
+- **Launcher module:** a directory in `app/src/launcher/modules/` implementing
+  `LauncherModule`, registered in `modules/mod.rs`.
 - **Service:** a module in `services/src/` implementing `ManagedService`,
   registered in `app/src/state.rs` and the `[services]` config.
 - **Component or pattern:** in `crates/ui`, with a story in `crates/story`.

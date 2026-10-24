@@ -3,6 +3,7 @@
 //! This module provides integration with the Hyprland compositor via its IPC socket.
 //! Uses incremental updates with direct Mutable mutation for efficiency.
 
+use crate::lifecycle::RunToken;
 use anyhow::Result;
 use futures_signals::signal::Mutable;
 use hyprland::{
@@ -14,7 +15,6 @@ use hyprland::{
     prelude::*,
 };
 use itertools::Itertools;
-use crate::lifecycle::RunToken;
 use tracing::{debug, info};
 
 use super::types::{ActiveWindow, CompositorCommand, CompositorState, Monitor, Workspace};

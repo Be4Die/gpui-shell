@@ -1,6 +1,6 @@
-//! The launcher view API.
+//! The launcher module API.
 //!
-//! A view is a GPUI entity. Most views hand the launcher [`Item`]s and let it
+//! A module is a GPUI entity. Most modules hand the launcher [`Item`]s and let it
 //! rank, draw and activate them; richer ones draw their own rows or cards, or
 //! take over the whole body with [`Body::Custom`].
 
@@ -16,10 +16,10 @@ use super::item::Item;
 /// gpui's default line height, as a multiple of the font size.
 const LINE_HEIGHT: f32 = 1.618;
 
-/// How the launcher knows a view: everything help, routing and the footer
-/// need before the view is ever built.
+/// How the launcher knows a module: everything help, routing and the footer
+/// need before the module is ever built.
 #[derive(Clone)]
-pub struct ViewMeta {
+pub struct ModuleMeta {
     pub id: &'static str,
     pub prefix: SharedString,
     pub name: &'static str,
@@ -35,8 +35,8 @@ pub struct ViewMeta {
 pub enum Matching {
     /// The launcher fuzzy-ranks items against the query.
     Shell,
-    /// The view already did; keep its order.
-    View,
+    /// The module already did; keep its order.
+    Module,
 }
 
 pub enum Items {
@@ -50,7 +50,7 @@ pub enum Body {
     Grid {
         columns: usize,
     },
-    /// The view draws the whole body itself; it gets no items.
+    /// The module draws the whole body itself; it gets no items.
     Custom(AnyView),
 }
 
@@ -62,7 +62,7 @@ pub enum Outcome {
     SetQuery(String),
 }
 
-/// Navigation keys a view may claim before the launcher moves the selection.
+/// Navigation keys a module may claim before the launcher moves the selection.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum NavKey {
     Up,
@@ -72,20 +72,20 @@ pub enum NavKey {
     Enter,
 }
 
-pub enum ViewEvent {
-    /// The view's data changed under the same query; ask for items again.
+pub enum ModuleEvent {
+    /// The module's data changed under the same query; ask for items again.
     ItemsChanged,
 }
 
 pub type Hint = (SharedString, SharedString);
 
-pub trait LauncherView: EventEmitter<ViewEvent> + Sized + 'static {
+pub trait LauncherModule: EventEmitter<ModuleEvent> + Sized + 'static {
     fn matching(&self) -> Matching {
         Matching::Shell
     }
 
     /// Items for `query`. Called when the query changes and after
-    /// [`ViewEvent::ItemsChanged`], never per frame.
+    /// [`ModuleEvent::ItemsChanged`], never per frame.
     fn items(&mut self, query: &str, cx: &mut Context<Self>) -> Items;
 
     /// Run `action` on `item`. Clicks, Enter and Shift+Enter all land here.
@@ -149,9 +149,9 @@ pub fn list_row_height(cx: &App, lines: &[TextSize], min_content: Pixels) -> Pix
     text.max(min_content) + Spacing::XSmall.pixels() * 2. + px(2.)
 }
 
-/// A built view behind a trait object, so the launcher can hold views of
+/// A built module behind a trait object, so the launcher can hold modules of
 /// different types.
-pub(super) trait ViewHandle {
+pub(super) trait ModuleHandle {
     fn matching(&self, cx: &App) -> Matching;
     fn items(&self, query: &str, cx: &mut App) -> Items;
     fn activate(&self, item: &Item, action: &str, cx: &mut App) -> Outcome;
@@ -168,25 +168,25 @@ pub(super) trait ViewHandle {
     fn empty_text(&self, cx: &App) -> Option<SharedString>;
     fn on_key(&self, key: NavKey, cx: &mut App) -> Option<Outcome>;
     fn footer_hints(&self, selected: Option<&Item>, cx: &App) -> Option<Vec<Hint>>;
-    /// Redraw the launcher when the view notifies; requery on `ItemsChanged`.
+    /// Redraw the launcher when the module notifies; requery on `ItemsChanged`.
     fn connect(&self, cx: &mut Context<Launcher>) -> [Subscription; 2];
 }
 
-impl<V: LauncherView> ViewHandle for Entity<V> {
+impl<V: LauncherModule> ModuleHandle for Entity<V> {
     fn matching(&self, cx: &App) -> Matching {
         self.read(cx).matching()
     }
 
     fn items(&self, query: &str, cx: &mut App) -> Items {
-        self.update(cx, |view, cx| view.items(query, cx))
+        self.update(cx, |module, cx| module.items(query, cx))
     }
 
     fn activate(&self, item: &Item, action: &str, cx: &mut App) -> Outcome {
-        self.update(cx, |view, cx| view.activate(item, action, cx))
+        self.update(cx, |module, cx| module.activate(item, action, cx))
     }
 
     fn body(&self, cx: &mut App) -> Body {
-        self.update(cx, |view, cx| view.body(cx))
+        self.update(cx, |module, cx| module.body(cx))
     }
 
     fn row_height(&self, cx: &App) -> Pixels {
@@ -204,7 +204,7 @@ impl<V: LauncherView> ViewHandle for Entity<V> {
     }
 
     fn render_header(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
-        self.update(cx, |view, cx| view.render_header(window, cx))
+        self.update(cx, |module, cx| module.render_header(window, cx))
     }
 
     fn empty_text(&self, cx: &App) -> Option<SharedString> {
@@ -212,7 +212,7 @@ impl<V: LauncherView> ViewHandle for Entity<V> {
     }
 
     fn on_key(&self, key: NavKey, cx: &mut App) -> Option<Outcome> {
-        self.update(cx, |view, cx| view.on_key(key, cx))
+        self.update(cx, |module, cx| module.on_key(key, cx))
     }
 
     fn footer_hints(&self, selected: Option<&Item>, cx: &App) -> Option<Vec<Hint>> {
@@ -223,23 +223,23 @@ impl<V: LauncherView> ViewHandle for Entity<V> {
         [
             cx.observe(self, |_, _, cx| cx.notify()),
             cx.subscribe(self, |launcher, _, event, cx| match event {
-                ViewEvent::ItemsChanged => launcher.requery(true, cx),
+                ModuleEvent::ItemsChanged => launcher.requery(true, cx),
             }),
         ]
     }
 }
 
-type BuildView = dyn Fn(&mut App) -> Box<dyn ViewHandle>;
+type BuildModule = dyn Fn(&mut App) -> Box<dyn ModuleHandle>;
 
-/// A view the launcher can build on first use.
-pub struct ViewDescriptor {
-    pub meta: ViewMeta,
-    build: Box<BuildView>,
+/// A module the launcher can build on first use.
+pub struct ModuleDescriptor {
+    pub meta: ModuleMeta,
+    build: Box<BuildModule>,
 }
 
-impl ViewDescriptor {
-    pub fn new<V: LauncherView>(
-        meta: ViewMeta,
+impl ModuleDescriptor {
+    pub fn new<V: LauncherModule>(
+        meta: ModuleMeta,
         build: impl Fn(&mut Context<V>) -> V + 'static,
     ) -> Self {
         Self {
@@ -248,7 +248,7 @@ impl ViewDescriptor {
         }
     }
 
-    pub(super) fn build(&self, cx: &mut App) -> Box<dyn ViewHandle> {
+    pub(super) fn build(&self, cx: &mut App) -> Box<dyn ModuleHandle> {
         (self.build)(cx)
     }
 }

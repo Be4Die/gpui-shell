@@ -1,4 +1,4 @@
-//! Help view listing every other view by prefix.
+//! Help module listing every other module by prefix.
 
 pub mod config;
 
@@ -10,12 +10,14 @@ use ui::{
 
 use self::config::HelpConfig;
 use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::view::{Items, LauncherView, Outcome, ViewDescriptor, ViewEvent, ViewMeta};
+use crate::launcher::module::{
+    Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
+};
 
-pub fn descriptor(config: &HelpConfig, views: Vec<ViewMeta>) -> ViewDescriptor {
-    let entries: Vec<ViewMeta> = views.into_iter().filter(|meta| meta.in_help).collect();
-    ViewDescriptor::new(
-        ViewMeta {
+pub fn descriptor(config: &HelpConfig, modules: Vec<ModuleMeta>) -> ModuleDescriptor {
+    let entries: Vec<ModuleMeta> = modules.into_iter().filter(|meta| meta.in_help).collect();
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "help",
             prefix: config.prefix.clone().into(),
             name: "Help",
@@ -24,19 +26,19 @@ pub fn descriptor(config: &HelpConfig, views: Vec<ViewMeta>) -> ViewDescriptor {
             default: false,
             in_help: false,
         },
-        move |_| HelpView {
+        move |_| HelpModule {
             entries: entries.clone(),
         },
     )
 }
 
-pub struct HelpView {
-    entries: Vec<ViewMeta>,
+pub struct HelpModule {
+    entries: Vec<ModuleMeta>,
 }
 
-impl EventEmitter<ViewEvent> for HelpView {}
+impl EventEmitter<ModuleEvent> for HelpModule {}
 
-impl LauncherView for HelpView {
+impl LauncherModule for HelpModule {
     fn items(&mut self, _query: &str, _cx: &mut Context<Self>) -> Items {
         Items::Ready(
             self.entries

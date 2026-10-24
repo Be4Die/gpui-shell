@@ -1,4 +1,4 @@
-//! Wallpaper view: a grid of thumbnails. Applying one generates a matching
+//! Wallpaper module: a grid of thumbnails. Applying one generates a matching
 //! theme with matugen in the background; it waits above the grid until
 //! picked.
 
@@ -19,11 +19,12 @@ use ui::{
 
 use self::config::WallpaperConfig;
 use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::row::thumbnail_image;
-use crate::launcher::view::{
-    Body, Items, LauncherView, Outcome, ViewDescriptor, ViewEvent, ViewMeta, list_row_height,
+use crate::launcher::module::{
+    Body, Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
+    list_row_height,
 };
-use crate::launcher::views::theme::{apply_palette, palette_is_active};
+use crate::launcher::modules::theme::{apply_palette, palette_is_active};
+use crate::launcher::row::thumbnail_image;
 use crate::state::AppState;
 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp"];
@@ -33,10 +34,10 @@ const THUMB_HEIGHT: Pixels = px(100.);
 /// Widest a card gets in the default window, for sizing the thumbnail.
 const THUMB_WIDTH: Pixels = px(190.);
 
-pub fn descriptor(config: &WallpaperConfig) -> ViewDescriptor {
+pub fn descriptor(config: &WallpaperConfig) -> ModuleDescriptor {
     let config = config.clone();
-    ViewDescriptor::new(
-        ViewMeta {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "wallpaper",
             prefix: config.prefix.clone().into(),
             name: "Wallpaper",
@@ -45,7 +46,7 @@ pub fn descriptor(config: &WallpaperConfig) -> ViewDescriptor {
             default: false,
             in_help: true,
         },
-        move |cx| WallpaperView::new(&config, cx),
+        move |cx| WallpaperModule::new(&config, cx),
     )
 }
 
@@ -97,18 +98,18 @@ struct WallpaperEntry {
     mtime: Option<SystemTime>,
 }
 
-pub struct WallpaperView {
+pub struct WallpaperModule {
     directory: PathBuf,
     entries: Vec<WallpaperEntry>,
     scanning: bool,
     columns: usize,
     matugen: bool,
     matugen_scheme: String,
-    /// Thumbnail loads notify this view, which redraws the launcher.
+    /// Thumbnail loads notify this module, which redraws the launcher.
     owner: EntityId,
 }
 
-impl WallpaperView {
+impl WallpaperModule {
     fn new(config: &WallpaperConfig, cx: &mut Context<Self>) -> Self {
         let directory = expand_tilde(&config.directory);
         let scan_dir = directory.clone();
@@ -119,7 +120,7 @@ impl WallpaperView {
             this.update(cx, |this, cx| {
                 this.entries = entries;
                 this.scanning = false;
-                cx.emit(ViewEvent::ItemsChanged);
+                cx.emit(ModuleEvent::ItemsChanged);
             })
             .ok();
         })
@@ -224,9 +225,9 @@ fn palette_chip(
         })
 }
 
-impl EventEmitter<ViewEvent> for WallpaperView {}
+impl EventEmitter<ModuleEvent> for WallpaperModule {}
 
-impl LauncherView for WallpaperView {
+impl LauncherModule for WallpaperModule {
     fn items(&mut self, _query: &str, _cx: &mut Context<Self>) -> Items {
         Items::Ready(
             self.entries

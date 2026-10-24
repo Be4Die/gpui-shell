@@ -1,4 +1,4 @@
-//! Theme browser view: the active theme up top, the scheme registry's
+//! Theme browser module: the active theme up top, the scheme registry's
 //! download/update control, and the list filtered by where a scheme comes
 //! from. Schemes, the stylix palette and registry status load off the UI
 //! thread; so does fetching a provider.
@@ -21,11 +21,11 @@ use ui::{
 use self::config::ThemesConfig;
 use crate::config::Config;
 use crate::launcher::item::Item;
-use crate::launcher::view::{
-    Hint, Items, LauncherView, NavKey, Outcome, ViewDescriptor, ViewEvent, ViewMeta,
+use crate::launcher::module::{
+    Hint, Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, NavKey, Outcome,
     list_row_height,
 };
-use crate::launcher::views::wallpaper::{
+use crate::launcher::modules::wallpaper::{
     GeneratedTheme, generated_palettes, generated_theme_name, wallpaper_of_theme_name,
 };
 
@@ -35,9 +35,9 @@ const THEME_ICON: IconName = IconName::Palette;
 const ROW_TILE: (Pixels, Pixels) = (px(40.), px(30.));
 const HERO_TILE: (Pixels, Pixels) = (px(58.), px(40.));
 
-pub fn descriptor(config: &ThemesConfig) -> ViewDescriptor {
-    ViewDescriptor::new(
-        ViewMeta {
+pub fn descriptor(config: &ThemesConfig) -> ModuleDescriptor {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "themes",
             prefix: config.prefix.clone().into(),
             name: "Themes",
@@ -46,7 +46,7 @@ pub fn descriptor(config: &ThemesConfig) -> ViewDescriptor {
             default: false,
             in_help: true,
         },
-        ThemeView::new,
+        ThemeModule::new,
     )
 }
 
@@ -138,7 +138,7 @@ struct Loaded {
     registries: Vec<Registry>,
 }
 
-pub struct ThemeView {
+pub struct ThemeModule {
     /// Everything on disk: built-in, registry and stylix schemes.
     loaded: Vec<Entry>,
     /// `loaded` plus the palettes generated from the wallpaper; item ids
@@ -152,13 +152,13 @@ pub struct ThemeView {
     fetch_errors: HashMap<&'static str, SharedString>,
 }
 
-impl ThemeView {
+impl ThemeModule {
     fn new(cx: &mut Context<Self>) -> Self {
         cx.default_global::<GeneratedTheme>();
         cx.observe_global::<GeneratedTheme>(|this, cx| this.rebuild(cx))
             .detach();
 
-        let mut view = Self {
+        let mut module = Self {
             loaded: builtin_entries(),
             entries: Vec::new(),
             registries: THEME_PROVIDERS
@@ -174,9 +174,9 @@ impl ThemeView {
             fetching: HashSet::new(),
             fetch_errors: HashMap::new(),
         };
-        view.rebuild(cx);
-        view.reload(cx);
-        view
+        module.rebuild(cx);
+        module.reload(cx);
+        module
     }
 
     /// Recombine the disk schemes with the wallpaper palettes.
@@ -193,7 +193,7 @@ impl ThemeView {
                 });
             }
         }
-        cx.emit(ViewEvent::ItemsChanged);
+        cx.emit(ModuleEvent::ItemsChanged);
         cx.notify();
     }
 
@@ -267,7 +267,7 @@ impl ThemeView {
             return;
         }
         self.filter = filter;
-        cx.emit(ViewEvent::ItemsChanged);
+        cx.emit(ModuleEvent::ItemsChanged);
         cx.notify();
     }
 
@@ -389,9 +389,9 @@ fn colors_match(a: Hsla, b: Hsla) -> bool {
     (a.h - b.h).abs() < 0.01 && (a.s - b.s).abs() < 0.01 && (a.l - b.l).abs() < 0.01
 }
 
-impl EventEmitter<ViewEvent> for ThemeView {}
+impl EventEmitter<ModuleEvent> for ThemeModule {}
 
-impl LauncherView for ThemeView {
+impl LauncherModule for ThemeModule {
     fn items(&mut self, _query: &str, _cx: &mut Context<Self>) -> Items {
         Items::Ready(
             self.entries

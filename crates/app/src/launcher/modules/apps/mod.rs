@@ -1,4 +1,4 @@
-//! Applications view for searching and launching desktop applications.
+//! Applications module for searching and launching desktop applications.
 
 pub mod config;
 
@@ -7,14 +7,16 @@ use ui::IconName;
 
 use self::config::AppsConfig;
 use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::view::{Items, LauncherView, Outcome, ViewDescriptor, ViewEvent, ViewMeta};
+use crate::launcher::module::{
+    Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
+};
 use crate::state::AppState;
 
 const ICON: IconName = IconName::Layers;
 
-pub fn descriptor(config: &AppsConfig) -> ViewDescriptor {
-    ViewDescriptor::new(
-        ViewMeta {
+pub fn descriptor(config: &AppsConfig) -> ModuleDescriptor {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "apps",
             prefix: config.prefix.clone().into(),
             name: "Applications",
@@ -23,15 +25,15 @@ pub fn descriptor(config: &AppsConfig) -> ViewDescriptor {
             default: true,
             in_help: true,
         },
-        |_| AppsView,
+        |_| AppsModule,
     )
 }
 
-pub struct AppsView;
+pub struct AppsModule;
 
-impl EventEmitter<ViewEvent> for AppsView {}
+impl EventEmitter<ModuleEvent> for AppsModule {}
 
-impl LauncherView for AppsView {
+impl LauncherModule for AppsModule {
     fn items(&mut self, _query: &str, cx: &mut Context<Self>) -> Items {
         let apps = AppState::applications(cx).all();
         Items::Ready(

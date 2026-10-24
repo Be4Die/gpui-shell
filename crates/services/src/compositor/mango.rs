@@ -292,17 +292,22 @@ pub fn start_listener(data: Mutable<CompositorState>, token: RunToken) {
         }
     });
 
-    spawn_watch_thread(data.clone(), &token, "watch focusing-client", |data, json| {
-        let mut state = data.lock_mut();
-        state.active_window = map_active_window(&json);
-        // `watch all-clients` may not itself re-emit purely on a focus
-        // change, so re-derive is_focused here too rather than relying on
-        // that stream alone to keep it fresh.
-        let focused_id = state.active_window.as_ref().map(|w| w.address.clone());
-        for w in state.windows.iter_mut() {
-            w.is_focused = Some(&w.id) == focused_id.as_ref();
-        }
-    });
+    spawn_watch_thread(
+        data.clone(),
+        &token,
+        "watch focusing-client",
+        |data, json| {
+            let mut state = data.lock_mut();
+            state.active_window = map_active_window(&json);
+            // `watch all-clients` may not itself re-emit purely on a focus
+            // change, so re-derive is_focused here too rather than relying on
+            // that stream alone to keep it fresh.
+            let focused_id = state.active_window.as_ref().map(|w| w.address.clone());
+            for w in state.windows.iter_mut() {
+                w.is_focused = Some(&w.id) == focused_id.as_ref();
+            }
+        },
+    );
 
     spawn_watch_thread(data.clone(), &token, "watch keymode", |data, json| {
         if let Some(keymode) = json["keymode"].as_str() {
@@ -311,12 +316,17 @@ pub fn start_listener(data: Mutable<CompositorState>, token: RunToken) {
         }
     });
 
-    spawn_watch_thread(data.clone(), &token, "watch keyboardlayout", |data, json| {
-        if let Some(layout) = json["layout"].as_str() {
-            let mut state = data.lock_mut();
-            state.keyboard_layout = layout.to_string();
-        }
-    });
+    spawn_watch_thread(
+        data.clone(),
+        &token,
+        "watch keyboardlayout",
+        |data, json| {
+            if let Some(layout) = json["layout"].as_str() {
+                let mut state = data.lock_mut();
+                state.keyboard_layout = layout.to_string();
+            }
+        },
+    );
 
     spawn_watch_thread(data.clone(), &token, "watch all-clients", |data, json| {
         if let Some(clients) = json["clients"].as_array() {

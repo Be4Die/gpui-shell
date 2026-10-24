@@ -1,18 +1,18 @@
-//! Which view owns the input, and what it searches for.
+//! Which module owns the input, and what it searches for.
 
-use super::view::ViewMeta;
+use super::module::ModuleMeta;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Route {
     /// Index into the registry.
-    pub view: usize,
-    /// The input with the view's prefix removed.
+    pub module: usize,
+    /// The input with the module's prefix removed.
     pub query: String,
 }
 
 /// The longest matching prefix wins; a stray prefix character goes to help,
-/// anything else to the default view.
-pub fn route(input: &str, metas: &[ViewMeta]) -> Route {
+/// anything else to the default module.
+pub fn route(input: &str, metas: &[ModuleMeta]) -> Route {
     let input = input.trim();
     let fallback = metas
         .iter()
@@ -22,7 +22,7 @@ pub fn route(input: &str, metas: &[ViewMeta]) -> Route {
 
     if input.is_empty() {
         return Route {
-            view: fallback,
+            module: fallback,
             query: String::new(),
         };
     }
@@ -32,9 +32,9 @@ pub fn route(input: &str, metas: &[ViewMeta]) -> Route {
         .enumerate()
         .filter(|(_, meta)| !meta.prefix.is_empty() && input.starts_with(meta.prefix.as_ref()))
         .max_by_key(|(_, meta)| meta.prefix.len());
-    if let Some((view, meta)) = best {
+    if let Some((module, meta)) = best {
         return Route {
-            view,
+            module,
             query: input[meta.prefix.len()..].trim_start().to_string(),
         };
     }
@@ -43,18 +43,18 @@ pub fn route(input: &str, metas: &[ViewMeta]) -> Route {
     let looks_like_prefix = metas.iter().any(|meta| meta.prefix.chars().next() == first);
     if looks_like_prefix && let Some(help) = help_index(metas) {
         return Route {
-            view: help,
+            module: help,
             query: input.to_string(),
         };
     }
 
     Route {
-        view: fallback,
+        module: fallback,
         query: input.to_string(),
     }
 }
 
-fn help_index(metas: &[ViewMeta]) -> Option<usize> {
+fn help_index(metas: &[ModuleMeta]) -> Option<usize> {
     metas.iter().position(|meta| meta.id == "help")
 }
 
@@ -63,8 +63,8 @@ mod tests {
     use super::*;
     use ui::IconName;
 
-    fn meta(id: &'static str, prefix: &'static str, default: bool) -> ViewMeta {
-        ViewMeta {
+    fn meta(id: &'static str, prefix: &'static str, default: bool) -> ModuleMeta {
+        ModuleMeta {
             id,
             prefix: prefix.into(),
             name: id,
@@ -75,7 +75,7 @@ mod tests {
         }
     }
 
-    fn metas() -> Vec<ViewMeta> {
+    fn metas() -> Vec<ModuleMeta> {
         vec![
             meta("apps", "@", true),
             meta("services", ";s", false),
@@ -85,11 +85,11 @@ mod tests {
     }
 
     #[test]
-    fn plain_text_goes_to_the_default_view() {
+    fn plain_text_goes_to_the_default_module() {
         assert_eq!(
             route("fire", &metas()),
             Route {
-                view: 0,
+                module: 0,
                 query: "fire".into()
             }
         );
@@ -100,11 +100,11 @@ mod tests {
         assert_eq!(
             route(";wp  forest", &metas()),
             Route {
-                view: 2,
+                module: 2,
                 query: "forest".into()
             }
         );
-        assert_eq!(route(";s", &metas()).view, 1);
+        assert_eq!(route(";s", &metas()).module, 1);
     }
 
     #[test]
@@ -112,7 +112,7 @@ mod tests {
         assert_eq!(
             route(";x", &metas()),
             Route {
-                view: 3,
+                module: 3,
                 query: ";x".into()
             }
         );
@@ -121,6 +121,6 @@ mod tests {
     #[test]
     fn empty_input_without_a_default_falls_back_to_help() {
         let metas: Vec<_> = metas().into_iter().filter(|m| !m.default).collect();
-        assert_eq!(route("", &metas).view, 2);
+        assert_eq!(route("", &metas).module, 2);
     }
 }

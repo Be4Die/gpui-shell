@@ -1,17 +1,17 @@
 ---
-title: Adding a launcher view
-description: Write a launcher view against the current, unstable Rust API.
+title: Adding a launcher module
+description: Write a launcher module against the current, unstable Rust API.
 ---
 
-> **Unstable.** The `LauncherView` trait can still change before 1.0, and
-> views live in-tree and are written in Rust. The data path (items in,
+> **Unstable.** The `LauncherModule` trait can still change before 1.0, and
+> modules live in-tree and are written in Rust. The data path (items in,
 > activations out) is the part a future plugin API will build on.
 
-We'll build a `Links` view: type `;l`, filter a list of saved links, press
+We'll build a `Links` module: type `;l`, filter a list of saved links, press
 Enter to open one.
 
 ```toml
-[launcher.views.links]
+[launcher.modules.links]
 prefix = ";l"
 links = [
   { name = "GPUi Shell", url = "https://github.com/andre-brandao/gpui-shell" },
@@ -19,34 +19,34 @@ links = [
 ]
 ```
 
-## How a view works
+## How a module works
 
-The launcher owns the window, the input, the selection and the rows. A view
+The launcher owns the window, the input, the selection and the rows. A module
 is a GPUI entity, picked by its prefix; the text after the prefix is its
 query.
 
-1. When the query changes, the launcher calls `items(query)` once. The view
+1. When the query changes, the launcher calls `items(query)` once. The module
    returns plain `Item`s: id, title, subtitle, icon, keywords, actions.
 2. The launcher fuzzy-ranks them, highlights the matched letters and draws
    only the rows on screen.
 3. Enter, a click, or Shift+Enter calls `activate(item, action)`, which
    returns `Close`, `Stay` or `SetQuery(..)`.
 
-A view never filters per row, wires a click, or touches the input. When its
+A module never filters per row, wires a click, or touches the input. When its
 own data changes (a service updated, a scan finished), it emits
-`ViewEvent::ItemsChanged` and the launcher asks again, keeping the cursor on
-the same item. `cx.notify()` on the view redraws the launcher.
+`ModuleEvent::ItemsChanged` and the launcher asks again, keeping the cursor on
+the same item. `cx.notify()` on the module redraws the launcher.
 
-Views are built the first time their prefix is typed, so a view that
+Modules are built the first time their prefix is typed, so a module that
 subscribes to a service in its constructor starts it only when someone opens
-the view.
+the module.
 
-## 1. Create the view
+## 1. Create the module
 
-Each view is a directory in `crates/app/src/launcher/views/`.
+Each module is a directory in `crates/app/src/launcher/modules/`.
 
 ```rust
-// crates/app/src/launcher/views/links/config.rs
+// crates/app/src/launcher/modules/links/config.rs
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,11 +57,11 @@ pub struct Link {
     pub url: String,
 }
 
-/// `[launcher.views.links]`
+/// `[launcher.modules.links]`
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LinksConfig {
-    /// Prefix that opens the view.
+    /// Prefix that opens the module.
     pub prefix: String,
     /// Saved links, in display order.
     pub links: Vec<Link>,
@@ -78,8 +78,8 @@ impl Default for LinksConfig {
 ```
 
 ```rust
-// crates/app/src/launcher/views/links/mod.rs
-//! Links view for opening saved URLs.
+// crates/app/src/launcher/modules/links/mod.rs
+//! Links module for opening saved URLs.
 
 pub mod config;
 
@@ -90,12 +90,12 @@ use ui::IconName;
 
 use self::config::{Link, LinksConfig};
 use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::view::{Items, LauncherView, Outcome, ViewDescriptor, ViewEvent, ViewMeta};
+use crate::launcher::module::{Items, LauncherModule, Outcome, ModuleDescriptor, ModuleEvent, ModuleMeta};
 
-pub fn descriptor(config: &LinksConfig) -> ViewDescriptor {
+pub fn descriptor(config: &LinksConfig) -> ModuleDescriptor {
     let links = config.links.clone();
-    ViewDescriptor::new(
-        ViewMeta {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "links",
             prefix: config.prefix.clone().into(),
             name: "Links",
@@ -104,17 +104,17 @@ pub fn descriptor(config: &LinksConfig) -> ViewDescriptor {
             default: false,
             in_help: true,
         },
-        move |_cx| LinksView { links: links.clone() },
+        move |_cx| LinksModule { links: links.clone() },
     )
 }
 
-pub struct LinksView {
+pub struct LinksModule {
     links: Vec<Link>,
 }
 
-impl EventEmitter<ViewEvent> for LinksView {}
+impl EventEmitter<ModuleEvent> for LinksModule {}
 
-impl LauncherView for LinksView {
+impl LauncherModule for LinksModule {
     fn items(&mut self, _query: &str, _cx: &mut Context<Self>) -> Items {
         Items::Ready(
             self.links
@@ -138,17 +138,17 @@ impl LauncherView for LinksView {
 }
 ```
 
-That's the whole view. Matching, highlighting, clicks, key hints (`Open
+That's the whole module. Matching, highlighting, clicks, key hints (`Open
 Enter`, built from the item's actions) and the empty list are the
 launcher's job.
 
 ## Going further
 
-Everything below is an optional method on `LauncherView`.
+Everything below is an optional method on `LauncherModule`.
 
 | Want | Use |
 | --- | --- |
-| Filter yourself, keep your order (a shell command) | `matching() -> Matching::View` |
+| Filter yourself, keep your order (a shell command) | `matching() -> Matching::Module` |
 | Slow source (files, history, network) | return `Items::Pending(task)`; the old items stay until it resolves |
 | A second action on Shift+Enter | a second `.action(..)` on the item |
 | Your own row or card | `render_row`, plus `row_height` if it isn't the default |
@@ -162,18 +162,18 @@ Everything below is an optional method on `LauncherView`.
 The rule for `render_row`: draw the row, don't wire its click. The launcher
 wraps every row in one clickable element that calls `activate`, so click and
 Enter always do the same thing. For images, `launcher::row::thumbnail_image`
-returns a cached, downscaled thumbnail and notifies the view when it lands.
+returns a cached, downscaled thumbnail and notifies the module when it lands.
 
-The calculator (`views/calculator`) is the smallest custom body and web
-search (`views/web`) a fuller one; the wallpaper view (`views/wallpaper`) is
+The calculator (`modules/calculator`) is the smallest custom body and web
+search (`modules/web`) a fuller one; the wallpaper module (`modules/wallpaper`) is
 the reference for a grid.
 
 ## 2. Register it
 
-1. **`launcher/views/mod.rs`**: `pub mod links;` and
+1. **`launcher/modules/mod.rs`**: `pub mod links;` and
    `links::descriptor(&config.links)` in `registry`.
-2. **`launcher/config.rs`**: add `pub links: LinksConfig` to `ViewsConfig`,
-   which makes `[launcher.views.links]` load.
+2. **`launcher/config.rs`**: add `pub links: LinksConfig` to `ModulesConfig`,
+   which makes `[launcher.modules.links]` load.
 
 Prefixes must be unique. Check `?` in the launcher for the ones taken.
 

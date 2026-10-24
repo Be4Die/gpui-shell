@@ -1,4 +1,4 @@
-//! Calculator view: a custom body with no items. `= 2 * (3 + 4)` shows the
+//! Calculator module: a custom body with no items. `= 2 * (3 + 4)` shows the
 //! steps and the result as you type; Enter copies it.
 
 pub mod config;
@@ -12,13 +12,13 @@ use ui::{ActiveTheme, Color, IconName, Label, LabelCommon, Radius, Spacing, Text
 
 use self::config::CalculatorConfig;
 use self::eval::{Evaluation, evaluate, format_number};
-use crate::launcher::view::{
-    Body, Hint, Items, LauncherView, NavKey, Outcome, ViewDescriptor, ViewEvent, ViewMeta,
+use crate::launcher::module::{
+    Body, Hint, Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, NavKey, Outcome,
 };
 
-pub fn descriptor(config: &CalculatorConfig) -> ViewDescriptor {
-    ViewDescriptor::new(
-        ViewMeta {
+pub fn descriptor(config: &CalculatorConfig) -> ModuleDescriptor {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "calculator",
             prefix: config.prefix.clone().into(),
             name: "Calculator",
@@ -27,19 +27,19 @@ pub fn descriptor(config: &CalculatorConfig) -> ViewDescriptor {
             default: false,
             in_help: true,
         },
-        |_| CalculatorView {
+        |_| CalculatorModule {
             expression: String::new(),
             evaluation: None,
         },
     )
 }
 
-pub struct CalculatorView {
+pub struct CalculatorModule {
     expression: String,
     evaluation: Option<Evaluation>,
 }
 
-impl CalculatorView {
+impl CalculatorModule {
     fn formatted(&self) -> Option<String> {
         match self.evaluation.as_ref()?.result {
             Ok(value) => Some(format_number(value)),
@@ -48,9 +48,9 @@ impl CalculatorView {
     }
 }
 
-impl EventEmitter<ViewEvent> for CalculatorView {}
+impl EventEmitter<ModuleEvent> for CalculatorModule {}
 
-impl LauncherView for CalculatorView {
+impl LauncherModule for CalculatorModule {
     fn items(&mut self, query: &str, cx: &mut Context<Self>) -> Items {
         self.expression = query.trim().to_string();
         self.evaluation = (!self.expression.is_empty()).then(|| evaluate(&self.expression));
@@ -90,7 +90,7 @@ impl LauncherView for CalculatorView {
     }
 }
 
-impl Render for CalculatorView {
+impl Render for CalculatorModule {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
         let (result, color): (SharedString, Color) = match &self.evaluation {

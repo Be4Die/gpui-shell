@@ -1,4 +1,4 @@
-//! The launcher's default row, and icon drawing shared with views that draw
+//! The launcher's default row, and icon drawing shared with modules that draw
 //! their own.
 
 use std::path::Path;

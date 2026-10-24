@@ -65,7 +65,7 @@ service's `JobQueue` (`crates/services/src/jobs.rs`): `dispatch` queues, one
 worker per run executes them in order, and `request` awaits a result. UI code
 never `cx.spawn`s a command or blocks on one. Startup mode per service lives in
 `config.toml` under `[services]` (`eager`, `lazy` or `off`); lazy services start
-on first `AppState::x(cx)` access. The `;s` launcher view shows status, retained
+on first `AppState::x(cx)` access. The `;s` launcher module shows status, retained
 state size and the restart/stop/mode actions.
 
 ### Config vs state
@@ -83,7 +83,7 @@ again), and `gpuishell --validate` prints where the parse gave up.
 - **Bar** (`crates/app/src/bar/`) — Wayland layer shell status bar with pluggable
   modules
 - **Launcher** (`crates/app/src/launcher/`) — Prefix-based command launcher
-  (views implement `LauncherView` trait)
+  (modules implement `LauncherModule` trait)
 - **Control Center** (`crates/app/src/control_center/`) — Popup panels for
   system controls
 - **Panel System** (`crates/app/src/panel.rs`) — Only one panel open at a time

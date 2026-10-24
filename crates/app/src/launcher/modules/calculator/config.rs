@@ -1,8 +1,8 @@
-//! Calculator view configuration.
+//! Calculator module configuration.
 
 use serde::{Deserialize, Serialize};
 
-/// Calculator view configuration.
+/// Calculator module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CalculatorConfig {

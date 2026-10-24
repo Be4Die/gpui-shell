@@ -3,9 +3,9 @@
 //! This module provides a reactive subscriber for tracking media stream access
 //! via PipeWire and webcam device usage via inotify.
 
+use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use futures_signals::signal::{Mutable, MutableSignalCloned};

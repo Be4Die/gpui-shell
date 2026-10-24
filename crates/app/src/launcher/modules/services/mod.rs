@@ -1,4 +1,4 @@
-//! Services view - inspect and control the shell's background services.
+//! Services module - inspect and control the shell's background services.
 //!
 //! Two levels, both driven by the query:
 //!
@@ -22,22 +22,22 @@ use self::config::ServicesConfig;
 use crate::config::State;
 use crate::icons;
 use crate::launcher::item::Item;
-use crate::launcher::view::{
-    Items, LauncherView, Matching, Outcome, ViewDescriptor, ViewEvent, ViewMeta,
+use crate::launcher::module::{
+    Items, LauncherModule, Matching, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
 };
 use crate::state::{AppState, watch};
 
-/// Icon for the services view itself, and for any service without a more
+/// Icon for the services module itself, and for any service without a more
 /// specific one.
 const SERVICES_ICON: IconName = IconName::Gauge;
 
 /// How often the resident-memory figure in the header is refreshed.
 const RSS_INTERVAL: Duration = Duration::from_secs(1);
 
-pub fn descriptor(config: &ServicesConfig) -> ViewDescriptor {
+pub fn descriptor(config: &ServicesConfig) -> ModuleDescriptor {
     let prefix = config.prefix.clone();
-    ViewDescriptor::new(
-        ViewMeta {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "services",
             prefix: config.prefix.clone().into(),
             name: "Services",
@@ -46,12 +46,12 @@ pub fn descriptor(config: &ServicesConfig) -> ViewDescriptor {
             default: false,
             in_help: true,
         },
-        move |cx| ServicesView::new(prefix.clone(), cx),
+        move |cx| ServicesModule::new(prefix.clone(), cx),
     )
 }
 
-/// Services status view.
-pub struct ServicesView {
+/// Services status module.
+pub struct ServicesModule {
     prefix: String,
     /// Every service as of the last query; the header summarises all of
     /// them, including those the query hides.
@@ -111,16 +111,16 @@ impl Action {
     }
 }
 
-impl ServicesView {
+impl ServicesModule {
     fn new(prefix: String, cx: &mut Context<Self>) -> Self {
-        // Keeps the view live while a service starts, errors or is stopped
-        // from the view itself.
+        // Keeps the module live while a service starts, errors or is stopped
+        // from the module itself.
         let signals: Vec<_> = AppState::managed_services(cx)
             .into_iter()
             .map(|service| service.status_signal())
             .collect();
         for signal in signals {
-            watch(cx, signal, |_, _, cx| cx.emit(ViewEvent::ItemsChanged));
+            watch(cx, signal, |_, _, cx| cx.emit(ModuleEvent::ItemsChanged));
         }
 
         cx.spawn(async move |this, cx| {
@@ -201,16 +201,16 @@ impl ServicesView {
             }
         }
         // A mode change fires no status signal.
-        cx.emit(ViewEvent::ItemsChanged);
+        cx.emit(ModuleEvent::ItemsChanged);
     }
 }
 
-impl EventEmitter<ViewEvent> for ServicesView {}
+impl EventEmitter<ModuleEvent> for ServicesModule {}
 
-impl LauncherView for ServicesView {
+impl LauncherModule for ServicesModule {
     fn matching(&self) -> Matching {
         if self.detail.is_some() {
-            Matching::View
+            Matching::Module
         } else {
             Matching::Shell
         }

@@ -1,4 +1,4 @@
-//! Workspaces view for switching between compositor workspaces.
+//! Workspaces module for switching between compositor workspaces.
 
 pub mod config;
 
@@ -8,14 +8,16 @@ use ui::IconName;
 
 use self::config::WorkspacesConfig;
 use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::view::{Items, LauncherView, Outcome, ViewDescriptor, ViewEvent, ViewMeta};
+use crate::launcher::module::{
+    Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
+};
 use crate::state::{AppState, watch};
 
 const ICON: IconName = IconName::Layout;
 
-pub fn descriptor(config: &WorkspacesConfig) -> ViewDescriptor {
-    ViewDescriptor::new(
-        ViewMeta {
+pub fn descriptor(config: &WorkspacesConfig) -> ModuleDescriptor {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "workspaces",
             prefix: config.prefix.clone().into(),
             name: "Workspaces",
@@ -24,23 +26,25 @@ pub fn descriptor(config: &WorkspacesConfig) -> ViewDescriptor {
             default: false,
             in_help: true,
         },
-        WorkspacesView::new,
+        WorkspacesModule::new,
     )
 }
 
-pub struct WorkspacesView;
+pub struct WorkspacesModule;
 
-impl WorkspacesView {
+impl WorkspacesModule {
     fn new(cx: &mut Context<Self>) -> Self {
         let compositor = AppState::compositor(cx).subscribe();
-        watch(cx, compositor, |_, _, cx| cx.emit(ViewEvent::ItemsChanged));
+        watch(cx, compositor, |_, _, cx| {
+            cx.emit(ModuleEvent::ItemsChanged)
+        });
         Self
     }
 }
 
-impl EventEmitter<ViewEvent> for WorkspacesView {}
+impl EventEmitter<ModuleEvent> for WorkspacesModule {}
 
-impl LauncherView for WorkspacesView {
+impl LauncherModule for WorkspacesModule {
     fn items(&mut self, _query: &str, cx: &mut Context<Self>) -> Items {
         let compositor = AppState::compositor(cx).get();
         Items::Ready(

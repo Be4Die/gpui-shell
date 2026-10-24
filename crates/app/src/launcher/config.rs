@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::views::{
+use super::modules::{
     apps::config::AppsConfig, calculator::config::CalculatorConfig, help::config::HelpConfig,
     services::config::ServicesConfig, shell::config::ShellConfig, theme::config::ThemesConfig,
     wallpaper::config::WallpaperConfig, web::config::WebConfig,
@@ -17,9 +17,9 @@ pub struct LauncherConfig {
     pub margin_right: f32,
     pub margin_bottom: f32,
     pub margin_left: f32,
-    /// Per-view settings, `[launcher.views.<id>]`.
-    #[serde(alias = "modules")]
-    pub views: ViewsConfig,
+    /// Per-module settings, `[launcher.modules.<id>]`.
+    #[serde(alias = "views")]
+    pub modules: ModulesConfig,
 }
 
 impl Default for LauncherConfig {
@@ -31,15 +31,15 @@ impl Default for LauncherConfig {
             margin_right: 0.0,
             margin_bottom: 0.0,
             margin_left: 0.0,
-            views: ViewsConfig::default(),
+            modules: ModulesConfig::default(),
         }
     }
 }
 
-/// Configuration for launcher views.
+/// Configuration for launcher modules.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ViewsConfig {
+pub struct ModulesConfig {
     pub apps: AppsConfig,
     pub shell: ShellConfig,
     pub web: WebConfig,

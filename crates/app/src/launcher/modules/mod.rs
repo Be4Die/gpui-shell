@@ -1,4 +1,4 @@
-//! Built-in launcher views. Adding one means a directory here and a line in
+//! Built-in launcher modules. Adding one means a directory here and a line in
 //! [`registry`].
 
 pub mod apps;
@@ -11,13 +11,13 @@ pub mod wallpaper;
 pub mod web;
 pub mod workspaces;
 
-use super::config::ViewsConfig;
-use super::view::ViewDescriptor;
+use super::config::ModulesConfig;
+use super::module::ModuleDescriptor;
 
-/// Every view, in help and footer order. Help comes last so it can list the
+/// Every module, in help and footer order. Help comes last so it can list the
 /// rest.
-pub fn registry(config: &ViewsConfig) -> Vec<ViewDescriptor> {
-    let mut views = vec![
+pub fn registry(config: &ModulesConfig) -> Vec<ModuleDescriptor> {
+    let mut modules = vec![
         apps::descriptor(&config.apps),
         shell::descriptor(&config.shell),
         web::descriptor(&config.web),
@@ -27,7 +27,7 @@ pub fn registry(config: &ViewsConfig) -> Vec<ViewDescriptor> {
         services::descriptor(&config.services),
         calculator::descriptor(&config.calculator),
     ];
-    let listed = views.iter().map(|view| view.meta.clone()).collect();
-    views.push(help::descriptor(&config.help, listed));
-    views
+    let listed = modules.iter().map(|module| module.meta.clone()).collect();
+    modules.push(help::descriptor(&config.help, listed));
+    modules
 }

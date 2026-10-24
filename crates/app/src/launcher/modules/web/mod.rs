@@ -1,4 +1,4 @@
-//! Web search view: `!<shebang> query` searches one provider, else the
+//! Web search module: `!<shebang> query` searches one provider, else the
 //! default one. A custom body: the query card, then the providers.
 
 pub mod config;
@@ -12,14 +12,14 @@ use ui::{
 
 use self::config::{WebConfig, WebProviderConfig};
 use crate::launcher::item::Item;
-use crate::launcher::view::{
-    Body, Hint, Items, LauncherView, NavKey, Outcome, ViewDescriptor, ViewEvent, ViewMeta,
+use crate::launcher::module::{
+    Body, Hint, Items, LauncherModule, ModuleDescriptor, ModuleEvent, ModuleMeta, NavKey, Outcome,
 };
 
-pub fn descriptor(config: &WebConfig) -> ViewDescriptor {
+pub fn descriptor(config: &WebConfig) -> ModuleDescriptor {
     let providers = config.providers.clone();
-    ViewDescriptor::new(
-        ViewMeta {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "web",
             prefix: config.prefix.clone().into(),
             name: "Web Search",
@@ -28,7 +28,7 @@ pub fn descriptor(config: &WebConfig) -> ViewDescriptor {
             default: false,
             in_help: true,
         },
-        move |_| WebSearchView {
+        move |_| WebSearchModule {
             providers: providers.clone(),
             provider: None,
             search: String::new(),
@@ -36,7 +36,7 @@ pub fn descriptor(config: &WebConfig) -> ViewDescriptor {
     )
 }
 
-pub struct WebSearchView {
+pub struct WebSearchModule {
     providers: Vec<WebProviderConfig>,
     /// Index of the provider the query picked.
     provider: Option<usize>,
@@ -44,7 +44,7 @@ pub struct WebSearchView {
     search: String,
 }
 
-impl WebSearchView {
+impl WebSearchModule {
     /// The provider a leading shebang picks, else the default one.
     fn split<'a>(&self, query: &'a str) -> (Option<usize>, &'a str) {
         let query = query.trim();
@@ -80,9 +80,9 @@ impl WebSearchView {
     }
 }
 
-impl EventEmitter<ViewEvent> for WebSearchView {}
+impl EventEmitter<ModuleEvent> for WebSearchModule {}
 
-impl LauncherView for WebSearchView {
+impl LauncherModule for WebSearchModule {
     fn items(&mut self, query: &str, cx: &mut Context<Self>) -> Items {
         let (provider, search) = self.split(query);
         self.provider = provider;
@@ -113,7 +113,7 @@ impl LauncherView for WebSearchView {
     }
 }
 
-impl Render for WebSearchView {
+impl Render for WebSearchModule {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors();
         let interactive_default = colors.element_background;

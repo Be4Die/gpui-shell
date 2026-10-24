@@ -1,8 +1,8 @@
-//! Wallpaper view configuration.
+//! Wallpaper module configuration.
 
 use serde::{Deserialize, Serialize};
 
-/// Wallpaper view configuration.
+/// Wallpaper module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WallpaperConfig {

@@ -300,5 +300,5 @@
 
   <path class="cmd" d="M1352 820V846H150V824" marker-end="url(#arrow-c)"/>
 
-  <text class="s" x="40" y="878">start() takes a fresh RunToken · stop()/restart bump the generation, the old listener bows out · mode per service: eager | lazy | off ([services], ;s view)</text>
+  <text class="s" x="40" y="878">start() takes a fresh RunToken · stop()/restart bump the generation, the old listener bows out · mode per service: eager | lazy | off ([services], ;s module)</text>
 </svg>

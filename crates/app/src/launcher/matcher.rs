@@ -1,4 +1,4 @@
-//! Fuzzy ranking shared by every view that leaves matching to the launcher.
+//! Fuzzy ranking shared by every module that leaves matching to the launcher.
 
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -27,7 +27,7 @@ impl Default for Ranker {
 
 impl Ranker {
     /// Matching items, best first. A title match outranks one found only in
-    /// the subtitle or keywords; ties keep the view's order.
+    /// the subtitle or keywords; ties keep the module's order.
     pub fn rank(&mut self, query: &str, items: &[Item]) -> Vec<Ranked> {
         let query = query.trim();
         if query.is_empty() {

@@ -1,4 +1,4 @@
-//! What a list view hands the launcher. Plain data with no closures or
+//! What a list module hands the launcher. Plain data with no closures or
 //! elements, so the launcher owns ranking, rows and clicks.
 
 use std::path::PathBuf;

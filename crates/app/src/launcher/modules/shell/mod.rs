@@ -1,4 +1,4 @@
-//! Shell view: run the typed command in a terminal or in the background.
+//! Shell module: run the typed command in a terminal or in the background.
 
 pub mod config;
 
@@ -9,8 +9,8 @@ use ui::IconName;
 
 use self::config::ShellConfig;
 use crate::launcher::item::{Item, ItemIcon};
-use crate::launcher::view::{
-    Items, LauncherView, Matching, Outcome, ViewDescriptor, ViewEvent, ViewMeta,
+use crate::launcher::module::{
+    Items, LauncherModule, Matching, ModuleDescriptor, ModuleEvent, ModuleMeta, Outcome,
 };
 
 const ICON: IconName = IconName::SquareTerminal;
@@ -30,10 +30,10 @@ const TERMINALS: &[(&str, &[&str])] = &[
     ("x-terminal-emulator", &["-e", "sh", "-c"]),
 ];
 
-pub fn descriptor(config: &ShellConfig) -> ViewDescriptor {
+pub fn descriptor(config: &ShellConfig) -> ModuleDescriptor {
     let terminal = config.terminal.clone();
-    ViewDescriptor::new(
-        ViewMeta {
+    ModuleDescriptor::new(
+        ModuleMeta {
             id: "shell",
             prefix: config.prefix.clone().into(),
             name: "Shell",
@@ -42,21 +42,21 @@ pub fn descriptor(config: &ShellConfig) -> ViewDescriptor {
             default: false,
             in_help: true,
         },
-        move |_| ShellView {
+        move |_| ShellModule {
             terminal: terminal.clone(),
         },
     )
 }
 
-pub struct ShellView {
+pub struct ShellModule {
     terminal: String,
 }
 
-impl EventEmitter<ViewEvent> for ShellView {}
+impl EventEmitter<ModuleEvent> for ShellModule {}
 
-impl LauncherView for ShellView {
+impl LauncherModule for ShellModule {
     fn matching(&self) -> Matching {
-        Matching::View
+        Matching::Module
     }
 
     fn items(&mut self, query: &str, _cx: &mut Context<Self>) -> Items {

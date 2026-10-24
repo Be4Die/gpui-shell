@@ -25,11 +25,11 @@ height = 500.0
 margin_top = 150.0
 ```
 
-## Launcher Views
+## Launcher Modules
 
-The launcher is made of views, each opened by a command prefix. Each view is configured in its `[launcher.views.<view>]` section (`[launcher.modules.<view>]` still works).
+The launcher is made of modules, each opened by a command prefix. Each module is configured in its `[launcher.modules.<module>]` section (`[launcher.views.<module>]` still works).
 
-### Wallpaper View
+### Wallpaper Module
 
 Browse and apply wallpapers from a directory. Optionally generates a color scheme from the wallpaper using Matugen.
 
@@ -48,12 +48,12 @@ Thumbnails are decoded once and cached in `$XDG_CACHE_HOME/gpuishell/thumbs/`.
 #### Example
 
 ```toml
-[launcher.views.wallpaper]
+[launcher.modules.wallpaper]
 prefix = ";wp"
 directory = "~/Pictures/Wallpapers"
 ```
 
-### Services View
+### Services Module
 
 View the health status of all system services (Audio, Network, Bluetooth, UPower, MPRIS, Notifications, Tray, Sysinfo, Privacy, Wallpaper, and Brightness).
 
@@ -66,7 +66,7 @@ View the health status of all system services (Audio, Network, Bluetooth, UPower
 #### Example
 
 ```toml
-[launcher.views.services]
+[launcher.modules.services]
 prefix = ";s"
 ```
 

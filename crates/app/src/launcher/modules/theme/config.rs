@@ -1,16 +1,16 @@
-//! Apps view configuration.
+//! Theme module configuration.
 
 use serde::{Deserialize, Serialize};
 
-/// Apps view configuration.
+/// Themes module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct AppsConfig {
+pub struct ThemesConfig {
     pub prefix: String,
 }
 
-impl Default for AppsConfig {
+impl Default for ThemesConfig {
     fn default() -> Self {
-        Self { prefix: "@".into() }
+        Self { prefix: "~".into() }
     }
 }

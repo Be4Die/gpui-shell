@@ -1,13 +1,13 @@
 //! Keyboard-driven launcher. The launcher owns the window, the input, the
-//! selection and the rows; views (`views/`) supply items or a custom body.
+//! selection and the rows; modules (`modules/`) supply items or a custom body.
 
 pub mod config;
 pub mod item;
 mod matcher;
+pub mod module;
+pub mod modules;
 mod route;
 pub mod row;
-pub mod view;
-pub mod views;
 
 use std::ops::Range;
 
@@ -24,10 +24,10 @@ use ui::{
 
 use self::item::Item;
 use self::matcher::{Ranked, Ranker};
-use self::route::Route;
-use self::view::{
-    Body, Hint, Items, Matching, NavKey, Outcome, ViewDescriptor, ViewHandle, ViewMeta,
+use self::module::{
+    Body, Hint, Items, Matching, ModuleDescriptor, ModuleHandle, ModuleMeta, NavKey, Outcome,
 };
+use self::route::Route;
 use crate::config::Config;
 use crate::keybinds::{
     Backspace, Cancel, Confirm, CursorDown, CursorLeft, CursorRight, CursorUp, DeleteWordBack,
@@ -44,10 +44,10 @@ pub struct Launcher {
     /// Scroll state for custom bodies.
     body_scroll: ScrollHandle,
     list_scroll: VirtualListScrollHandle,
-    registry: Vec<ViewDescriptor>,
-    metas: Vec<ViewMeta>,
-    /// Built on first route, so views nobody opens never start their services.
-    views: Vec<Option<Box<dyn ViewHandle>>>,
+    registry: Vec<ModuleDescriptor>,
+    metas: Vec<ModuleMeta>,
+    /// Built on first route, so modules nobody opens never start their services.
+    modules: Vec<Option<Box<dyn ModuleHandle>>>,
     subscriptions: Vec<Subscription>,
     /// Input text `route` was computed from, so it is parsed once per edit.
     routed_input: String,
@@ -67,8 +67,8 @@ pub struct Launcher {
 impl Launcher {
     pub fn new(initial_input: Option<String>, cx: &mut Context<Self>) -> Self {
         let config = Config::global(cx).launcher.clone();
-        let registry = views::registry(&config.views);
-        let metas: Vec<ViewMeta> = registry.iter().map(|d| d.meta.clone()).collect();
+        let registry = modules::registry(&config.modules);
+        let metas: Vec<ModuleMeta> = registry.iter().map(|d| d.meta.clone()).collect();
         let input = InputBuffer::new(initial_input.unwrap_or_default());
         let routed_input = input.text().to_string();
         let route = route::route(&routed_input, &metas);
@@ -78,7 +78,7 @@ impl Launcher {
             focus_handle: cx.focus_handle(),
             body_scroll: ScrollHandle::new(),
             list_scroll: VirtualListScrollHandle::new(),
-            views: registry.iter().map(|_| None).collect(),
+            modules: registry.iter().map(|_| None).collect(),
             registry,
             metas,
             subscriptions: Vec::new(),
@@ -114,7 +114,7 @@ impl Launcher {
         if route == self.route {
             return;
         }
-        if route.view != self.route.view {
+        if route.module != self.route.module {
             self.items.clear();
             self.matches.clear();
         }
@@ -122,18 +122,18 @@ impl Launcher {
         self.requery(false, cx);
     }
 
-    fn current(&self) -> Option<&dyn ViewHandle> {
-        self.views.get(self.route.view)?.as_deref()
+    fn current(&self) -> Option<&dyn ModuleHandle> {
+        self.modules.get(self.route.module)?.as_deref()
     }
 
-    /// Ask the current view for items. `keep_selection` holds the cursor on
+    /// Ask the current module for items. `keep_selection` holds the cursor on
     /// the same item when the data changed under an unchanged query.
     pub(crate) fn requery(&mut self, keep_selection: bool, cx: &mut Context<Self>) {
-        let ix = self.route.view;
-        if self.views.get(ix).is_some_and(Option::is_none) {
-            let view = self.registry[ix].build(cx);
-            self.subscriptions.extend(view.connect(cx));
-            self.views[ix] = Some(view);
+        let ix = self.route.module;
+        if self.modules.get(ix).is_some_and(Option::is_none) {
+            let module = self.registry[ix].build(cx);
+            self.subscriptions.extend(module.connect(cx));
+            self.modules[ix] = Some(module);
         }
         if !keep_selection {
             self.selected = 0;
@@ -143,8 +143,8 @@ impl Launcher {
 
         self.generation += 1;
         let generation = self.generation;
-        let Some(view) = self.current() else { return };
-        match view.items(&self.route.query, cx) {
+        let Some(module) = self.current() else { return };
+        match module.items(&self.route.query, cx) {
             Items::Ready(items) => self.apply(items, keep_selection, cx),
             Items::Pending(task) => {
                 self.pending = Some(cx.spawn(async move |this, cx| {
@@ -167,10 +167,10 @@ impl Launcher {
             .flatten();
         let matching = self
             .current()
-            .map_or(Matching::Shell, |view| view.matching(cx));
+            .map_or(Matching::Shell, |module| module.matching(cx));
         self.matches = match matching {
             Matching::Shell => self.ranker.rank(&self.route.query, &items),
-            Matching::View => (0..items.len())
+            Matching::Module => (0..items.len())
                 .map(|index| Ranked {
                     index,
                     highlights: Vec::new(),
@@ -203,8 +203,8 @@ impl Launcher {
         let Some(action) = item.actions.get(action) else {
             return;
         };
-        let Some(view) = self.current() else { return };
-        let outcome = view.activate(&item, &action.id, cx);
+        let Some(module) = self.current() else { return };
+        let outcome = module.activate(&item, &action.id, cx);
         self.apply_outcome(outcome, window, cx);
     }
 
@@ -220,8 +220,8 @@ impl Launcher {
     }
 
     fn navigate(&mut self, key: NavKey, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(view) = self.current()
-            && let Some(outcome) = view.on_key(key, cx)
+        if let Some(module) = self.current()
+            && let Some(outcome) = module.on_key(key, cx)
         {
             self.apply_outcome(outcome, window, cx);
             return;
@@ -307,13 +307,13 @@ impl Launcher {
     ) -> gpui::AnyElement {
         let start = row * columns;
         let end = (start + columns).min(self.matches.len());
-        let view = self.current();
+        let module = self.current();
         let cells = (start..end).map(|ix| {
             let ranked = &self.matches[ix];
             let item = &self.items[ranked.index];
             let selected = ix == self.selected;
-            let content = view
-                .and_then(|view| view.render_row(item, selected, window, cx))
+            let content = module
+                .and_then(|module| module.render_row(item, selected, window, cx))
                 .unwrap_or_else(|| {
                     row::default_row(item, &ranked.highlights, selected, self.owner, window, cx)
                 });
@@ -366,14 +366,14 @@ impl Render for Launcher {
             self.focus_handle.focus(window, cx);
         }
 
-        let view_name = self.metas[self.route.view].name;
+        let module_name = self.metas[self.route.module].name;
         let (body, header, row_height, empty_text, hints) = match self.current() {
-            Some(view) => (
-                view.body(cx),
-                view.render_header(window, cx),
-                view.row_height(cx),
-                view.empty_text(cx),
-                view.footer_hints(self.selected_item(), cx),
+            Some(module) => (
+                module.body(cx),
+                module.render_header(window, cx),
+                module.row_height(cx),
+                module.empty_text(cx),
+                module.footer_hints(self.selected_item(), cx),
             ),
             None => (Body::List, None, px(0.), None, None),
         };
@@ -393,14 +393,14 @@ impl Render for Launcher {
         });
 
         let body = match body {
-            Body::Custom(view) => {
+            Body::Custom(custom) => {
                 self.columns = 1;
                 div()
-                    .id("view-scroll")
+                    .id("custom-scroll")
                     .flex_1()
                     .overflow_y_scroll()
                     .track_scroll(&self.body_scroll)
-                    .child(view)
+                    .child(custom)
                     .into_any_element()
             }
             Body::List | Body::Grid { .. } if self.matches.is_empty() => div()
@@ -521,7 +521,7 @@ impl Render for Launcher {
             .size_full()
             .child(
                 LauncherFrame::new(render_input_line(&self.input, &self.placeholder(), cx))
-                    .badge(view_name)
+                    .badge(module_name)
                     .hints(self.prefix_hints())
                     .actions(footer_hints(hints, cx))
                     .children(header)
