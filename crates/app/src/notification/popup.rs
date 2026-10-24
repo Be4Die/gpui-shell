@@ -2,6 +2,8 @@
 //! up to two peeking edges); hovered, it fans out, shows full cards and holds
 //! expiry. The window fits its content and only the cards take input.
 
+use std::sync::Arc;
+
 use futures_signals::signal::SignalExt;
 use futures_util::StreamExt;
 use gpui::{
@@ -32,7 +34,7 @@ pub(crate) struct PopupWindowState {
 
 struct NotificationPopupStack {
     subscriber: NotificationSubscriber,
-    notifications: Vec<Notification>,
+    notifications: Vec<Arc<Notification>>,
     hovered: bool,
     fit: WindowFit,
     /// Window size the input region was last set for.
@@ -40,7 +42,7 @@ struct NotificationPopupStack {
 }
 
 impl NotificationPopupStack {
-    fn new(subscriber: NotificationSubscriber, notifications: Vec<Notification>) -> Self {
+    fn new(subscriber: NotificationSubscriber, notifications: Vec<Arc<Notification>>) -> Self {
         Self {
             subscriber,
             notifications,
@@ -153,6 +155,7 @@ impl NotificationPopupStack {
         div()
             .id("notification-popup-stack")
             .w_full()
+            .max_h_full()
             .p(Spacing::Medium.pixels())
             .flex()
             .flex_col()
@@ -160,9 +163,13 @@ impl NotificationPopupStack {
                 this.set_hovered(*hovered, cx);
             }))
             .child(
+                // Taller than the screen: scroll rather than cut the last card.
                 div()
+                    .id("notification-popup-cards")
                     .flex()
                     .flex_col()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .gap(Spacing::XSmall.pixels())
                     .children(cards),
             )
@@ -178,12 +185,18 @@ impl Render for NotificationPopupStack {
         let margin = popup_margin(&config);
 
         let measure = self.build_stack(&config, cx);
+        // Fanned out, every card shows in full, bounded only by the screen.
+        let max_height = if self.hovered {
+            px(f32::INFINITY)
+        } else {
+            px(config.popup_height)
+        };
         let paint = self.fit.fit_height(
             window,
             cx,
             measure,
             px(config.popup_width),
-            px(config.popup_height),
+            max_height,
             px(margin.0 + margin.2),
         );
 

@@ -77,7 +77,8 @@ impl Notification {
 /// Notification center state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NotificationData {
-    pub notifications: Vec<Notification>,
+    /// Shared so a write hands each subscriber pointers, not copies.
+    pub notifications: Vec<Arc<Notification>>,
     pub popup_ids: Vec<u32>,
     pub dnd: bool,
     pub unread_count: usize,
@@ -88,7 +89,7 @@ impl NotificationData {
         self.unread_count = self.notifications.iter().filter(|n| !n.read).count();
     }
 
-    fn latest_popup(&self) -> Option<Notification> {
+    fn latest_popup(&self) -> Option<Arc<Notification>> {
         let id = self.popup_ids.first().copied()?;
         self.notifications.iter().find(|n| n.id == id).cloned()
     }
@@ -149,11 +150,11 @@ impl NotificationSubscriber {
         Self::default()
     }
 
-    pub fn latest_popup(&self) -> Option<Notification> {
+    pub fn latest_popup(&self) -> Option<Arc<Notification>> {
         self.data.lock_ref().latest_popup()
     }
 
-    pub fn popup_notifications(&self, limit: usize) -> Vec<Notification> {
+    pub fn popup_notifications(&self, limit: usize) -> Vec<Arc<Notification>> {
         let data = self.data.lock_ref();
         data.popup_ids
             .iter()
@@ -185,7 +186,7 @@ impl NotificationSubscriber {
         let mut data = self.data.lock_mut();
         data.notifications.retain(|n| n.id != id);
         data.popup_ids.retain(|n| *n != id);
-        data.notifications.insert(0, notification);
+        data.notifications.insert(0, Arc::new(notification));
         // Do-not-disturb still applies: it lands in the center, unread.
         if !data.dnd {
             data.popup_ids.insert(0, id);
@@ -224,8 +225,8 @@ impl NotificationSubscriber {
             }
             NotificationCommand::MarkAllRead => {
                 let mut data = self.data.lock_mut();
-                for item in &mut data.notifications {
-                    item.read = true;
+                for item in data.notifications.iter_mut().filter(|n| !n.read) {
+                    Arc::make_mut(item).read = true;
                 }
                 data.recompute_unread();
             }
@@ -609,7 +610,7 @@ impl NotificationServer {
             let mut data = self.data.lock_mut();
             data.notifications.retain(|n| n.id != id);
             data.popup_ids.retain(|n| *n != id);
-            data.notifications.insert(0, notification);
+            data.notifications.insert(0, Arc::new(notification));
             if data.notifications.len() > MAX_NOTIFICATION_HISTORY {
                 data.notifications.truncate(MAX_NOTIFICATION_HISTORY);
             }
@@ -829,11 +830,11 @@ mod tests {
             .data
             .lock_mut()
             .notifications
-            .push(Notification {
+            .push(Arc::new(Notification {
                 id: 7,
                 summary: "from an app on the bus".to_string(),
                 ..Notification::default()
-            });
+            }));
 
         notifications.clear_local(LocalSlot::ConfigError);
         // The second call has nothing left to do, and must not take the
@@ -916,10 +917,10 @@ mod tests {
         {
             let mut data = notifications.data.lock_mut();
             for id in [3, 7] {
-                data.notifications.push(Notification {
+                data.notifications.push(Arc::new(Notification {
                     id,
                     ..Notification::default()
-                });
+                }));
             }
         }
         assert_eq!(first_free_id(&notifications.get()), 8);
