@@ -9,6 +9,9 @@ mod types;
 
 pub use types::*;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Context as _;
@@ -19,8 +22,9 @@ use tracing::{debug, info};
 use zbus::Connection;
 
 use self::dbus::access_point::AccessPointProxy;
+use self::dbus::settings::SettingsProxy;
 use self::dbus::statistics::StatisticsProxy;
-use self::nm::NetworkManager;
+use self::nm::{NetworkManager, await_activation};
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 
 /// How long a requested scan may take before the UI stops showing it.
@@ -33,6 +37,12 @@ const SCAN_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Debug, Clone, Default)]
 pub struct NetworkSubscriber {
     core: crate::ServiceCore<NetworkData, NetworkCommand>,
+    /// Bumped per scan request, so only the latest one's timeout clears
+    /// `scanning`.
+    scan_generation: Arc<AtomicU64>,
+    /// Bumped per connect or dismiss, so a finished older attempt leaves
+    /// `wifi_attempt` alone.
+    attempt_generation: Arc<AtomicU64>,
 }
 
 impl std::ops::Deref for NetworkSubscriber {
@@ -67,37 +77,124 @@ impl NetworkSubscriber {
             NetworkCommand::RequestScan => {
                 debug!("Requesting WiFi scan");
                 // Cleared by the `LastScan` change that ends the scan, or by
-                // the timeout when no device reports one.
+                // this scan's own timeout when no device reports one.
+                let scan = self.scan_generation.fetch_add(1, Ordering::Relaxed) + 1;
                 self.data.lock_mut().scanning = true;
                 let data = self.data.clone();
-                let token = token.clone();
+                let generation = self.scan_generation.clone();
+                let timeout_token = token.clone();
                 tokio::spawn(async move {
-                    token
+                    timeout_token
                         .run_until_cancelled(tokio::time::sleep(SCAN_TIMEOUT))
                         .await;
-                    data.lock_mut().scanning = false;
+                    if generation.load(Ordering::Relaxed) == scan {
+                        data.lock_mut().scanning = false;
+                    }
                 });
-                let wireless_devices = nm.wireless_devices().await?;
-                for device in wireless_devices {
+
+                let mut started = false;
+                for device in nm.wireless_devices().await? {
                     let wireless = dbus::device::wireless::WirelessDeviceProxy::builder(&conn)
                         .path(&device)?
                         .build()
                         .await?;
-                    let _ = wireless
-                        .request_scan(std::collections::HashMap::new())
-                        .await;
+                    match wireless.request_scan(HashMap::new()).await {
+                        Ok(()) => started = true,
+                        // NM refuses scans right after another one.
+                        Err(e) => debug!("Scan request on {device} refused: {e}"),
+                    }
+                }
+                if !started {
+                    self.data.lock_mut().scanning = false;
                 }
             }
             NetworkCommand::Connect { ssid, password } => {
                 debug!("Connecting to: {}", ssid);
-                nm.connect_by_ssid(&ssid, password).await?;
+                self.connect(&conn, &nm, ssid, password, token).await?;
             }
             NetworkCommand::Disconnect(ssid) => {
                 debug!("Disconnecting: {}", ssid);
                 nm.disconnect_by_ssid(&ssid).await?;
             }
+            NetworkCommand::DismissWifiAttempt => {
+                self.attempt_generation.fetch_add(1, Ordering::Relaxed);
+                self.data.lock_mut().wifi_attempt = None;
+            }
+            NetworkCommand::ConnectVpn(profile) => {
+                debug!("Connecting VPN {profile}");
+                nm.connect_vpn(&profile).await?;
+            }
+            NetworkCommand::DisconnectVpn(profile) => {
+                debug!("Disconnecting VPN {profile}");
+                nm.disconnect_vpn(&profile).await?;
+            }
         }
 
+        Ok(())
+    }
+
+    /// Start a WiFi connect and follow it in the background, so a slow
+    /// handshake does not hold up the queue. The outcome lands in
+    /// `wifi_attempt`.
+    async fn connect(
+        &self,
+        conn: &Connection,
+        nm: &NetworkManager<'_>,
+        ssid: String,
+        password: Option<String>,
+        token: &RunToken,
+    ) -> anyhow::Result<()> {
+        let attempt = self.attempt_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let set_status = {
+            let data = self.data.clone();
+            let generation = self.attempt_generation.clone();
+            let ssid = ssid.clone();
+            move |status: Option<WifiAttemptStatus>| {
+                // A newer attempt or a dismiss owns the field now.
+                if generation.load(Ordering::Relaxed) == attempt {
+                    data.lock_mut().wifi_attempt = status.map(|status| WifiAttempt {
+                        ssid: ssid.clone(),
+                        status,
+                    });
+                }
+            }
+        };
+        set_status(Some(WifiAttemptStatus::Connecting));
+
+        let activation = match nm.connect_by_ssid(&ssid, password).await {
+            Ok(activation) => activation,
+            Err(e) => {
+                set_status(Some(WifiAttemptStatus::Failed(e.to_string())));
+                return Err(e);
+            }
+        };
+
+        let conn = conn.clone();
+        let data = self.data.clone();
+        let follow = async move {
+            let outcome = await_activation(&conn, &activation).await;
+            if let Err(status) = &outcome {
+                debug!("Connecting to {ssid} failed: {status:?}");
+                // Keep a rejected key from turning the network into a
+                // "known" one that fails the same way next time.
+                if let Some(profile) = &activation.created
+                    && let Ok(nm) = NetworkManager::new(&conn).await
+                    && let Err(e) = nm.delete_profile(profile).await
+                {
+                    debug!("Could not delete failed profile {profile}: {e}");
+                }
+            }
+            set_status(outcome.err());
+            if let Ok(nm) = NetworkManager::new(&conn).await
+                && let Ok(aps) = nm.wireless_access_points().await
+            {
+                data.lock_mut().wireless_access_points = aps;
+            }
+        };
+        let token = token.clone();
+        tokio::spawn(async move {
+            token.run_until_cancelled(follow).await;
+        });
         Ok(())
     }
 }
@@ -128,6 +225,11 @@ impl ManagedService for NetworkSubscriber {
                 .network_statistics
                 .iter()
                 .map(|stat| size_of::<NetworkStatistics>() + stat.device.len())
+                .sum::<usize>()
+            + data
+                .vpn_profiles
+                .iter()
+                .map(|vpn| size_of::<VpnProfile>() + vpn.name.len() + vpn.path.as_str().len())
                 .sum::<usize>()
     }
 
@@ -180,6 +282,7 @@ async fn fetch_network_data(conn: &Connection) -> anyhow::Result<NetworkData> {
     let active_connections = nm.active_connections().await?;
     let wireless_access_points = nm.wireless_access_points().await?;
     let network_statistics = nm.network_statistics().await?;
+    let vpn_profiles = nm.vpn_profiles().await.unwrap_or_default();
 
     Ok(NetworkData {
         wifi_enabled,
@@ -188,6 +291,8 @@ async fn fetch_network_data(conn: &Connection) -> anyhow::Result<NetworkData> {
         wireless_access_points,
         network_statistics,
         scanning: false,
+        vpn_profiles,
+        wifi_attempt: None,
     })
 }
 
@@ -255,6 +360,36 @@ async fn run_listener(
                     // Also refresh access points so connected/disconnected state is current
                     if let Ok(aps) = nm.wireless_access_points().await {
                         data.lock_mut().wireless_access_points = aps;
+                    }
+                    if let Ok(vpns) = nm.vpn_profiles().await {
+                        data.lock_mut().vpn_profiles = vpns;
+                    }
+                }
+                false
+            }
+        })
+        .boxed();
+
+    // Saved profiles decide `known` and the VPN list; follow edits made
+    // elsewhere, e.g. with nmcli.
+    let settings = SettingsProxy::new(&conn).await?;
+    let profiles_changed = futures_util::stream::select(
+        settings.receive_new_connection().await?.map(|_| ()),
+        settings.receive_connection_removed().await?.map(|_| ()),
+    );
+    let data_profiles = data.clone();
+    let conn_profiles = conn.clone();
+    let profiles_changed = profiles_changed
+        .then(move |()| {
+            let data = data_profiles.clone();
+            let conn = conn_profiles.clone();
+            async move {
+                if let Ok(nm) = NetworkManager::new(&conn).await {
+                    if let Ok(aps) = nm.wireless_access_points().await {
+                        data.lock_mut().wireless_access_points = aps;
+                    }
+                    if let Ok(vpns) = nm.vpn_profiles().await {
+                        data.lock_mut().vpn_profiles = vpns;
                     }
                 }
                 false
@@ -447,6 +582,7 @@ async fn run_listener(
     for stream in statistics_changes {
         events.push(stream);
     }
+    events.push(profiles_changed);
 
     while let Some(topology_changed) = events.next().await {
         if topology_changed {

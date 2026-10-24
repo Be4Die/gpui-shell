@@ -3,15 +3,17 @@
 //! This module provides a panel for controlling system settings like:
 //! - WiFi networks and connections
 //! - Bluetooth devices
+//! - VPN profiles
 //! - Volume and brightness
 //! - Power profiles and battery status
 //!
 //! The module is split into submodules for better organization:
-//! - `quick_toggles` - Quick toggle buttons for WiFi, Bluetooth, Mic
+//! - `quick_toggles` - Quick toggle buttons for WiFi, Bluetooth, VPN, Mic
 //! - `sliders` - Volume and brightness slider controls
-//! - `wifi` - WiFi network list and password handling
+//! - `wifi` - WiFi section entity: network list, connect and password flow
 //! - `bluetooth` - Bluetooth device list and connections
-//! - `list` - List chrome shared by the WiFi and Bluetooth sections
+//! - `vpn` - VPN profile list
+//! - `list` - List chrome shared by the WiFi, Bluetooth and VPN sections
 //! - `power` - Battery status and power profiles
 
 mod bluetooth;
@@ -21,25 +23,23 @@ mod power;
 mod quick_toggles;
 mod sliders;
 mod tooltip;
+mod vpn;
 mod wifi;
 
 pub use config::{ControlCenterConfig, PowerActionsConfig};
 
 use crate::icons;
-use gpui::{App, Context, FocusHandle, Focusable, MouseButton, Task, Window, div, prelude::*, px};
-use services::{ChargeLimit, NetworkCommand, UPowerCommand};
-use ui::patterns::PanelSurface;
-use ui::{ActiveTheme, Color, Icon, IconName, IconSize, InputBuffer, Radius, Spacing, TextSize};
-
-use crate::keybinds::{
-    Backspace, Cancel, Confirm, CursorLeft, CursorRight, DeleteWordBack, SelectAll, SelectLeft,
-    SelectRight, SelectWordLeft, SelectWordRight, WordLeft, WordRight,
+use gpui::{
+    App, Context, Entity, FocusHandle, Focusable, MouseButton, Task, Window, div, prelude::*, px,
 };
+use services::{ChargeLimit, UPowerCommand};
+use ui::patterns::PanelSurface;
+use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize};
+
 use crate::state::{AppState, watch, watch_task};
 
 pub use quick_toggles::ExpandedSection;
-use wifi::WifiAction;
-pub use wifi::WifiPasswordState;
+use wifi::WifiSection;
 
 pub const CONTROL_CENTER_PANEL_WIDTH: f32 = 340.0;
 /// Cap for an expanded section; the window host also clamps to the output.
@@ -49,14 +49,16 @@ pub const CONTROL_CENTER_PANEL_MAX_HEIGHT: f32 = 900.0;
 ///
 /// Provides a unified interface for system settings and quick actions.
 pub struct ControlCenter {
-    /// Currently expanded section (WiFi or Bluetooth)
+    /// Currently expanded section
     expanded: ExpandedSection,
     /// Focus handle for keyboard navigation
     focus_handle: FocusHandle,
-    /// WiFi password input state
-    wifi_password: WifiPasswordState,
+    /// Present while the WiFi section is expanded.
+    wifi: Option<Entity<WifiSection>>,
     /// Signals only the expanded section reads; dropped when it collapses.
     section_watch: Option<Task<()>>,
+    /// Take focus back on the next render, e.g. from a closed WiFi prompt.
+    refocus: bool,
 }
 
 impl ControlCenter {
@@ -81,8 +83,9 @@ impl ControlCenter {
         ControlCenter {
             expanded: ExpandedSection::None,
             focus_handle: cx.focus_handle(),
-            wifi_password: WifiPasswordState::default(),
+            wifi: None,
             section_watch: None,
+            refocus: false,
         }
     }
 
@@ -93,56 +96,29 @@ impl ControlCenter {
         } else {
             section
         };
-        self.wifi_password.clear();
-        // Per-device progress comes from the queue, not the device list.
-        self.section_watch = (self.expanded == ExpandedSection::Bluetooth).then(|| {
-            watch_task(cx, AppState::bluetooth(cx).pending_signal(), |_, _, cx| {
-                cx.notify()
-            })
+
+        // Dropping the section drops its prompt, and any focus it held.
+        self.refocus |= self.wifi.is_some();
+        self.wifi = (self.expanded == ExpandedSection::WiFi).then(|| {
+            let parent_focus = self.focus_handle.clone();
+            cx.new(|cx| WifiSection::new(parent_focus, cx))
         });
-        cx.notify();
-    }
 
-    fn on_wifi_action(&mut self, action: WifiAction, cx: &mut Context<Self>) {
-        match action {
-            WifiAction::Prompt(ssid) => self.wifi_password.start_for(ssid),
-            WifiAction::Connect { ssid, password } => self.connect_wifi(ssid, password, cx),
-            WifiAction::Disconnect(ssid) => {
-                AppState::network(cx).dispatch(NetworkCommand::Disconnect(ssid))
-            }
-            WifiAction::CancelPassword => self.wifi_password.clear(),
-        }
+        // Per-row progress comes from the queue, not the item list.
+        self.section_watch = match self.expanded {
+            ExpandedSection::Bluetooth => Some(watch_task(
+                cx,
+                AppState::bluetooth(cx).pending_signal(),
+                |_, _, cx| cx.notify(),
+            )),
+            ExpandedSection::Vpn => Some(watch_task(
+                cx,
+                AppState::network(cx).pending_signal(),
+                |_, _, cx| cx.notify(),
+            )),
+            _ => None,
+        };
         cx.notify();
-    }
-
-    fn connect_wifi(&mut self, ssid: String, password: Option<String>, cx: &mut Context<Self>) {
-        let password = password.filter(|p| !p.is_empty());
-        let network = AppState::network(cx).clone();
-        self.wifi_password.connecting = true;
-        cx.spawn(async move |this, cx| {
-            let result = network
-                .request(NetworkCommand::Connect { ssid, password })
-                .await;
-            this.update(cx, |this, cx| {
-                this.wifi_password.connecting = false;
-                match result {
-                    Ok(()) => this.wifi_password.clear(),
-                    Err(e) => this.wifi_password.error = Some(format!("Connection failed: {e}")),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-        cx.notify();
-    }
-
-    /// Apply a key action to the password field, if one is open.
-    fn edit_password(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut InputBuffer)) {
-        if self.wifi_password.ssid.is_some() {
-            edit(&mut self.wifi_password.input);
-            cx.notify();
-        }
     }
 }
 
@@ -153,18 +129,16 @@ impl Focusable for ControlCenter {
 }
 
 impl Render for ControlCenter {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.refocus) {
+            self.focus_handle.focus(window, cx);
+        }
+
         let entity = cx.entity();
         let on_toggle_section = {
             let entity = entity.clone();
             move |section: ExpandedSection, cx: &mut App| {
                 entity.update(cx, |this, cx| this.toggle_section(section, cx));
-            }
-        };
-        let on_wifi_action = {
-            let entity = entity.clone();
-            move |action: WifiAction, cx: &mut App| {
-                entity.update(cx, |this, cx| this.on_wifi_action(action, cx));
             }
         };
         let on_toggle_section_power = {
@@ -244,84 +218,6 @@ impl Render for ControlCenter {
             .flex()
             .flex_col()
             .gap(Spacing::Large.pixels())
-            // Keyboard event handling for password input
-            .on_action(cx.listener(|this, _: &Backspace, _, cx| {
-                this.edit_password(cx, InputBuffer::backspace)
-            }))
-            .on_action(cx.listener(|this, _: &DeleteWordBack, _, cx| {
-                this.edit_password(cx, InputBuffer::delete_word_back)
-            }))
-            .on_action(cx.listener(|this, _: &CursorLeft, _, cx| {
-                this.edit_password(cx, |i| i.move_left(false))
-            }))
-            .on_action(cx.listener(|this, _: &CursorRight, _, cx| {
-                this.edit_password(cx, |i| i.move_right(false))
-            }))
-            .on_action(cx.listener(|this, _: &WordLeft, _, cx| {
-                this.edit_password(cx, |i| i.move_word_left(false))
-            }))
-            .on_action(cx.listener(|this, _: &WordRight, _, cx| {
-                this.edit_password(cx, |i| i.move_word_right(false))
-            }))
-            .on_action(cx.listener(|this, _: &SelectWordLeft, _, cx| {
-                this.edit_password(cx, |i| i.move_word_left(true))
-            }))
-            .on_action(cx.listener(|this, _: &SelectWordRight, _, cx| {
-                this.edit_password(cx, |i| i.move_word_right(true))
-            }))
-            .on_action(cx.listener(|this, _: &SelectLeft, _, cx| {
-                this.edit_password(cx, |i| i.move_left(true))
-            }))
-            .on_action(cx.listener(|this, _: &SelectRight, _, cx| {
-                this.edit_password(cx, |i| i.move_right(true))
-            }))
-            .on_action(cx.listener(|this, _: &SelectAll, _, cx| {
-                this.edit_password(cx, InputBuffer::select_all)
-            }))
-            .on_action(cx.listener(|this, _: &Cancel, _, cx| {
-                if this.wifi_password.ssid.is_some() {
-                    this.wifi_password.clear();
-                    cx.notify();
-                }
-            }))
-            .on_action(cx.listener(|this, _: &Confirm, _, cx| {
-                if this.wifi_password.connecting {
-                    return;
-                }
-                if let Some(ssid) = this.wifi_password.ssid.clone() {
-                    let password = this.wifi_password.input.text().to_string();
-                    this.connect_wifi(ssid, Some(password), cx);
-                }
-            }))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                // Handle printable character input for password.
-                if event.keystroke.modifiers.control || event.keystroke.modifiers.alt {
-                    return;
-                }
-
-                let input_char = event
-                    .keystroke
-                    .key_char
-                    .as_ref()
-                    .and_then(|s| s.chars().next())
-                    .or_else(|| {
-                        let key = event.keystroke.key.as_str();
-                        if key.chars().count() == 1 {
-                            key.chars().next()
-                        } else {
-                            None
-                        }
-                    });
-
-                let Some(ch) = input_char else {
-                    return;
-                };
-                if ch.is_control() {
-                    return;
-                }
-
-                this.edit_password(cx, |i| i.insert_str(&ch.to_string()));
-            }))
             .child(
                 div()
                     .id("control-center-header")
@@ -486,11 +382,10 @@ impl Render for ControlCenter {
                         .flex_col()
                         .gap(Spacing::Medium.pixels())
                         .when(expanded == ExpandedSection::WiFi, |el| {
-                            el.child(wifi::render_wifi_section(
-                                &self.wifi_password,
-                                on_wifi_action,
-                                cx,
-                            ))
+                            el.when_some(self.wifi.clone(), |el, wifi| el.child(wifi))
+                        })
+                        .when(expanded == ExpandedSection::Vpn, |el| {
+                            el.child(vpn::render_vpn_section(cx))
                         })
                         .when(expanded == ExpandedSection::Bluetooth, |el| {
                             el.child(bluetooth::render_bluetooth_section(cx))

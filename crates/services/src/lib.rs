@@ -45,7 +45,7 @@ pub use mpris::{
 };
 pub use network::{
     AccessPoint, ActiveConnectionInfo, ConnectivityState, DeviceState, DeviceType, NetworkCommand,
-    NetworkData, NetworkStatistics, NetworkSubscriber,
+    NetworkData, NetworkStatistics, NetworkSubscriber, VpnProfile, WifiAttempt, WifiAttemptStatus,
 };
 pub use notification::{
     LocalSlot, Notification, NotificationCommand, NotificationData, NotificationSubscriber,
