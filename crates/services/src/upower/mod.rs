@@ -15,6 +15,7 @@ use futures_util::stream::select_all;
 use tracing::{debug, error, info, warn};
 use zbus::Connection;
 
+use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 pub use dbus::{BatteryLevel, BatteryState, DeviceType, WarningLevel};
 use dbus::{DeviceProxy, PowerProfilesProxy, UPowerService};
@@ -271,6 +272,7 @@ pub enum UPowerCommand {
 pub struct UPowerSubscriber {
     data: Mutable<UPowerData>,
     lifecycle: Lifecycle,
+    jobs: JobQueue<UPowerCommand>,
 }
 
 impl UPowerSubscriber {
@@ -290,15 +292,26 @@ impl UPowerSubscriber {
         self.data.get_cloned()
     }
 
-    /// Execute a command.
-    pub async fn dispatch(&self, command: UPowerCommand) -> Result<()> {
+    /// Queue a command. Failures are logged.
+    pub fn dispatch(&self, command: UPowerCommand) {
+        self.jobs.send(command);
+    }
+
+    async fn execute(&self, command: UPowerCommand) -> Result<()> {
         match command {
             UPowerCommand::SetPowerProfile(profile) => {
                 self.set_power_profile(profile).await?;
             }
             UPowerCommand::CyclePowerProfile => {
-                let current = self.data.lock_ref().power_profile;
-                self.set_power_profile(current.next()).await?;
+                // Ask the daemon rather than the cache: a second click queued
+                // behind the first must not see the profile it is replacing.
+                let conn = crate::bus::system().await?;
+                let current = PowerProfilesProxy::new(&conn)
+                    .await?
+                    .active_profile()
+                    .await?;
+                self.set_power_profile(PowerProfile::from(current.as_str()).next())
+                    .await?;
             }
             UPowerCommand::Refresh => {
                 self.refresh().await?;
@@ -326,7 +339,7 @@ impl UPowerSubscriber {
     }
 
     /// Run the event monitoring loop.
-    async fn run(&self, token: RunToken) -> Result<()> {
+    async fn run(&self) -> Result<()> {
         info!("UPower subscriber started");
 
         let conn = crate::bus::system().await?;
@@ -498,17 +511,15 @@ impl UPowerSubscriber {
             profile_stream,
         ]);
 
-        // Process events
-        while token.alive() && (events.next().await).is_some() {
-            // Events are processed in their respective handlers
-        }
+        // Process events; the handlers write as they go.
+        while events.next().await.is_some() {}
 
         warn!("UPower event stream ended unexpectedly");
         Ok(())
     }
 
     /// Bring the subscriber up: fetch a snapshot, then monitor.
-    async fn run_from_scratch(&self, token: RunToken) {
+    async fn run_from_scratch(&self, token: &RunToken) {
         let conn = match crate::bus::system().await {
             Ok(conn) => conn,
             Err(e) => {
@@ -530,7 +541,7 @@ impl UPowerSubscriber {
             }
         }
 
-        if let Err(e) = self.run(token.clone()).await {
+        if let Err(e) = self.run().await {
             error!("UPower subscriber error: {}", e);
             token.error(e.to_string());
         }
@@ -564,7 +575,18 @@ impl ManagedService for UPowerSubscriber {
 
     fn start(&self) {
         let token = self.lifecycle.begin();
+
         let subscriber = self.clone();
-        tokio::spawn(async move { subscriber.run_from_scratch(token).await });
+        self.jobs.run(token.clone(), move |command| {
+            let subscriber = subscriber.clone();
+            async move { subscriber.execute(command).await }
+        });
+
+        let subscriber = self.clone();
+        tokio::spawn(async move {
+            token
+                .run_until_cancelled(subscriber.run_from_scratch(&token))
+                .await;
+        });
     }
 }

@@ -9,17 +9,22 @@ mod types;
 
 pub use types::*;
 
-use futures_signals::signal::{Mutable, MutableSignalCloned};
+use std::time::Duration;
+
+use futures_signals::signal::{Mutable, MutableSignalCloned, Signal};
 use futures_util::StreamExt;
 use futures_util::stream::select_all;
-use std::thread;
 use tracing::{debug, error, info};
 use zbus::Connection;
 
 use self::dbus::access_point::AccessPointProxy;
 use self::dbus::statistics::StatisticsProxy;
 use self::nm::NetworkManager;
+use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
+
+/// How long a requested scan may take before the UI stops showing it.
+const SCAN_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Event-driven network subscriber.
 ///
@@ -29,6 +34,7 @@ use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 pub struct NetworkSubscriber {
     data: Mutable<NetworkData>,
     lifecycle: Lifecycle,
+    jobs: JobQueue<NetworkCommand>,
 }
 
 impl NetworkSubscriber {
@@ -48,8 +54,29 @@ impl NetworkSubscriber {
         self.data.get_cloned()
     }
 
-    /// Execute a network command.
-    pub async fn dispatch(&self, command: NetworkCommand) -> anyhow::Result<()> {
+    /// Queue a network command. Failures are logged.
+    pub fn dispatch(&self, command: NetworkCommand) {
+        self.jobs.send(command);
+    }
+
+    /// Queue a network command and wait for its outcome.
+    pub fn request(
+        &self,
+        command: NetworkCommand,
+    ) -> impl Future<Output = anyhow::Result<()>> + use<> {
+        self.jobs.request(command)
+    }
+
+    /// Commands queued or running, for progress in the UI.
+    pub fn pending(&self) -> Vec<NetworkCommand> {
+        self.jobs.in_flight()
+    }
+
+    pub fn pending_signal(&self) -> impl Signal<Item = Vec<NetworkCommand>> + Unpin + use<> {
+        self.jobs.in_flight_signal()
+    }
+
+    async fn execute(&self, command: NetworkCommand, token: &RunToken) -> anyhow::Result<()> {
         let conn = crate::bus::system().await?;
         let nm = NetworkManager::new(&conn).await?;
 
@@ -65,6 +92,17 @@ impl NetworkSubscriber {
             }
             NetworkCommand::RequestScan => {
                 debug!("Requesting WiFi scan");
+                // Cleared by the `LastScan` change that ends the scan, or by
+                // the timeout when no device reports one.
+                self.data.lock_mut().scanning = true;
+                let data = self.data.clone();
+                let token = token.clone();
+                tokio::spawn(async move {
+                    token
+                        .run_until_cancelled(tokio::time::sleep(SCAN_TIMEOUT))
+                        .await;
+                    data.lock_mut().scanning = false;
+                });
                 let wireless_devices = nm.wireless_devices().await?;
                 for device in wireless_devices {
                     let wireless = dbus::device::wireless::WirelessDeviceProxy::builder(&conn)
@@ -123,31 +161,45 @@ impl ManagedService for NetworkSubscriber {
         let token = self.lifecycle.begin();
         let data = self.data.clone();
 
-        tokio::spawn(async move {
-            let conn = match crate::bus::system().await {
-                Ok(conn) => conn,
-                Err(e) => {
-                    error!("Failed to connect to the system bus: {}", e);
-                    token.error(e.to_string());
-                    return;
-                }
-            };
-
-            match fetch_network_data(&conn).await {
-                Ok(fetched) => {
-                    data.set(fetched);
-                    token.active();
-                }
-                Err(e) => {
-                    error!("Failed to fetch initial network data: {}", e);
-                    token.error(e.to_string());
-                }
-            }
-
-            // Started even after a failed fetch: the listener recovers when
-            // NetworkManager comes back.
-            start_listener(data, token, conn);
+        let subscriber = self.clone();
+        let jobs_token = token.clone();
+        self.jobs.run(token.clone(), move |command| {
+            let subscriber = subscriber.clone();
+            let token = jobs_token.clone();
+            async move { subscriber.execute(command, &token).await }
         });
+
+        tokio::spawn(async move {
+            token.run_until_cancelled(run(data, &token)).await;
+        });
+    }
+}
+
+/// One run: snapshot, then follow NetworkManager until the stream ends.
+async fn run(data: Mutable<NetworkData>, token: &RunToken) {
+    let conn = match crate::bus::system().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Failed to connect to the system bus: {}", e);
+            token.error(e.to_string());
+            return;
+        }
+    };
+
+    match fetch_network_data(&conn).await {
+        Ok(fetched) => {
+            data.set(fetched);
+            token.active();
+        }
+        Err(e) => {
+            error!("Failed to fetch initial network data: {}", e);
+            token.error(e.to_string());
+        }
+    }
+
+    if let Err(e) = run_listener(data, conn).await {
+        error!("Network listener error: {}", e);
+        token.error(e.to_string());
     }
 }
 
@@ -167,39 +219,15 @@ async fn fetch_network_data(conn: &Connection) -> anyhow::Result<NetworkData> {
         active_connections,
         wireless_access_points,
         network_statistics,
+        scanning: false,
     })
 }
 
-/// Start the D-Bus listener in a dedicated thread.
-fn start_listener(data: Mutable<NetworkData>, token: RunToken, conn: Connection) {
-    thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(e) => {
-                error!("Failed to create Tokio runtime for Network listener: {}", e);
-                token.error(e.to_string());
-                return;
-            }
-        };
-
-        rt.block_on(async move {
-            if let Err(e) = run_listener(data, conn, token.clone()).await {
-                error!("Network listener error: {}", e);
-                token.error(e.to_string());
-            }
-        });
-    });
-}
-
 /// Run the network listener event loop.
-async fn run_listener(
-    data: Mutable<NetworkData>,
-    conn: Connection,
-    token: RunToken,
-) -> anyhow::Result<()> {
+///
+/// Runs under [`RunToken::run_until_cancelled`], so a stop drops it - and
+/// every pending write in its streams - at the next await.
+async fn run_listener(data: Mutable<NetworkData>, conn: Connection) -> anyhow::Result<()> {
     info!("Network subscriber started");
 
     let nm = NetworkManager::new(&conn).await?;
@@ -284,7 +312,9 @@ async fn run_listener(
                             if let Ok(nm) = NetworkManager::new(&conn).await
                                 && let Ok(aps) = nm.wireless_access_points().await
                             {
-                                data.lock_mut().wireless_access_points = aps;
+                                let mut data = data.lock_mut();
+                                data.wireless_access_points = aps;
+                                data.scanning = false;
                                 debug!("Access points refreshed after scan");
                             }
                         }
@@ -434,7 +464,7 @@ async fn run_listener(
     }
 
     // Process events
-    while token.alive() && (events.next().await).is_some() {}
+    while events.next().await.is_some() {}
 
     Ok(())
 }

@@ -9,15 +9,17 @@ mod types;
 pub use types::*;
 
 use dbus::BluetoothDbus;
-use futures_signals::signal::{Mutable, MutableSignalCloned};
+use futures_signals::signal::{Mutable, MutableSignalCloned, Signal};
 use futures_util::StreamExt;
+use futures_util::stream::{BoxStream, select_all};
 use inotify::{Inotify, WatchMask};
 use std::process::Command;
-use std::sync::mpsc;
-use std::thread;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
+use tokio::task::AbortHandle;
 use tracing::{debug, error, warn};
 
+use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 
 /// Event-driven Bluetooth subscriber.
@@ -28,6 +30,10 @@ use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 pub struct BluetoothSubscriber {
     data: Mutable<BluetoothData>,
     lifecycle: Lifecycle,
+    jobs: JobQueue<BluetoothCommand>,
+    /// Stops a discovery after 15s. Replaced by every discovery command, so
+    /// a timer from an earlier scan cannot cut a newer one short.
+    discovery_timer: Arc<Mutex<Option<AbortHandle>>>,
 }
 
 impl BluetoothSubscriber {
@@ -47,10 +53,35 @@ impl BluetoothSubscriber {
         self.data.get_cloned()
     }
 
-    /// Execute a Bluetooth command.
-    pub async fn dispatch(&self, command: BluetoothCommand) -> anyhow::Result<()> {
+    /// Commands queued or running, for per-device progress in the UI.
+    pub fn pending(&self) -> Vec<BluetoothCommand> {
+        self.jobs.in_flight()
+    }
+
+    pub fn pending_signal(&self) -> impl Signal<Item = Vec<BluetoothCommand>> + Unpin + use<> {
+        self.jobs.in_flight_signal()
+    }
+
+    /// Queue a Bluetooth command. Failures are logged.
+    pub fn dispatch(&self, command: BluetoothCommand) {
+        self.jobs.send(command);
+    }
+
+    async fn execute(&self, command: BluetoothCommand, token: &RunToken) -> anyhow::Result<()> {
         let conn = crate::bus::system().await?;
         let bluetooth = BluetoothDbus::new(&conn).await?;
+
+        if matches!(
+            command,
+            BluetoothCommand::StartDiscovery | BluetoothCommand::StopDiscovery
+        ) && let Some(timer) = self
+            .discovery_timer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+        {
+            timer.abort();
+        }
 
         match command {
             BluetoothCommand::Toggle => {
@@ -73,15 +104,23 @@ impl BluetoothSubscriber {
                 debug!("Starting Bluetooth discovery");
                 bluetooth.start_discovery().await?;
 
-                // Auto-stop discovery after 15 seconds
-                let conn = conn.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_secs(15)).await;
-                    if let Ok(bt) = BluetoothDbus::new(&conn).await {
-                        let _ = bt.stop_discovery().await;
-                        debug!("Auto-stopped Bluetooth discovery after 15 seconds");
-                    }
+                // Auto-stop discovery after 15 seconds, unless the run ends first.
+                let token = token.clone();
+                let timer = tokio::spawn(async move {
+                    token
+                        .run_until_cancelled(async {
+                            tokio::time::sleep(Duration::from_secs(15)).await;
+                            if let Ok(bt) = BluetoothDbus::new(&conn).await {
+                                let _ = bt.stop_discovery().await;
+                                debug!("Auto-stopped Bluetooth discovery after 15 seconds");
+                            }
+                        })
+                        .await;
                 });
+                *self
+                    .discovery_timer
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = Some(timer.abort_handle());
             }
             BluetoothCommand::StopDiscovery => {
                 debug!("Stopping Bluetooth discovery");
@@ -169,167 +208,128 @@ impl ManagedService for BluetoothSubscriber {
         let token = self.lifecycle.begin();
         let data = self.data.clone();
 
+        let subscriber = self.clone();
+        let jobs_token = token.clone();
+        self.jobs.run(token.clone(), move |command| {
+            let subscriber = subscriber.clone();
+            let token = jobs_token.clone();
+            async move { subscriber.execute(command, &token).await }
+        });
+
         tokio::spawn(async move {
-            let conn = match crate::bus::system().await {
-                Ok(conn) => conn,
-                Err(e) => {
-                    error!("Failed to connect to the system bus: {}", e);
-                    token.error(e.to_string());
-                    return;
-                }
-            };
-
-            match fetch_bluetooth_data(&conn).await {
-                Ok(fetched) => {
-                    data.set(fetched);
-                    token.active();
-                }
-                Err(e) => {
-                    error!("Failed to fetch initial bluetooth data: {}", e);
-                    token.error(e.to_string());
-                }
-            }
-
-            start_listener(data, token, conn);
+            token.run_until_cancelled(run(data, &token)).await;
         });
     }
 }
 
-/// Start the D-Bus listener in a dedicated thread.
-fn start_listener(data: Mutable<BluetoothData>, token: RunToken, conn: zbus::Connection) {
-    thread::spawn(move || {
-        let rt = match tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(rt) => rt,
-            Err(e) => {
-                error!(
-                    "Failed to create Tokio runtime for Bluetooth listener: {}",
-                    e
-                );
-                token.error(e.to_string());
-                return;
-            }
-        };
+/// One run: snapshot, then follow BlueZ until every stream ends.
+async fn run(data: Mutable<BluetoothData>, token: &RunToken) {
+    let conn = match crate::bus::system().await {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("Failed to connect to the system bus: {}", e);
+            token.error(e.to_string());
+            return;
+        }
+    };
 
-        rt.block_on(async move {
-            if let Err(e) = run_listener(data, conn, token.clone()).await {
-                error!("Bluetooth listener error: {}", e);
-                token.error(e.to_string());
-            }
-        });
-    });
+    match fetch_bluetooth_data(&conn).await {
+        Ok(fetched) => {
+            data.set(fetched);
+            token.active();
+        }
+        Err(e) => {
+            error!("Failed to fetch initial bluetooth data: {}", e);
+            token.error(e.to_string());
+        }
+    }
+
+    if let Err(e) = run_listener(data, conn).await {
+        error!("Bluetooth listener error: {}", e);
+        token.error(e.to_string());
+    }
 }
 
 /// Run the Bluetooth service listener.
-async fn run_listener(
-    data: Mutable<BluetoothData>,
-    conn: zbus::Connection,
-    token: RunToken,
-) -> anyhow::Result<()> {
+///
+/// Every event triggers a full refetch, so the streams are merged into one
+/// stream of "something changed" ticks.
+async fn run_listener(data: Mutable<BluetoothData>, conn: zbus::Connection) -> anyhow::Result<()> {
     let bluetooth = BluetoothDbus::new(&conn).await?;
 
-    // Set up streams for interface changes
-    let mut interfaces_added = bluetooth.bluez.receive_interfaces_added().await?;
-    let mut interfaces_removed = bluetooth.bluez.receive_interfaces_removed().await?;
+    let mut changes: Vec<BoxStream<'_, &'static str>> = vec![
+        bluetooth
+            .bluez
+            .receive_interfaces_added()
+            .await?
+            .map(|_| "interfaces added")
+            .boxed(),
+        bluetooth
+            .bluez
+            .receive_interfaces_removed()
+            .await?
+            .map(|_| "interfaces removed")
+            .boxed(),
+    ];
 
-    // Set up adapter-specific streams if adapter exists
-    let (mut powered_stream, mut discovering_stream) = if let Some(adapter) = &bluetooth.adapter {
-        (
-            Some(adapter.receive_powered_changed().await),
-            Some(adapter.receive_discovering_changed().await),
-        )
-    } else {
-        (None, None)
-    };
+    if let Some(adapter) = &bluetooth.adapter {
+        changes.push(
+            adapter
+                .receive_powered_changed()
+                .await
+                .map(|_| "powered state changed")
+                .boxed(),
+        );
+        changes.push(
+            adapter
+                .receive_discovering_changed()
+                .await
+                .map(|_| "discovering state changed")
+                .boxed(),
+        );
+    }
 
-    // Set up rfkill monitoring using inotify
-    let rfkill_rx = setup_rfkill_monitor();
+    if let Some(rfkill) = rfkill_changes() {
+        changes.push(rfkill);
+    }
 
-    // Main event loop
-    while token.alive() {
-        let event_occurred = tokio::select! {
-            Some(_) = interfaces_added.next() => {
-                debug!("Bluetooth interfaces added");
-                true
-            }
-            Some(_) = interfaces_removed.next() => {
-                debug!("Bluetooth interfaces removed");
-                true
-            }
-            Some(_) = async {
-                match &mut powered_stream {
-                    Some(s) => s.next().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                debug!("Bluetooth powered state changed");
-                true
-            }
-            Some(_) = async {
-                match &mut discovering_stream {
-                    Some(s) => s.next().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                debug!("Bluetooth discovering state changed");
-                true
-            }
-            _ = async {
-                match &rfkill_rx {
-                    Some(rx) => {
-                        // Poll periodically since std mpsc isn't async
-                        loop {
-                            if rx.try_recv().is_ok() {
-                                break;
-                            }
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                        }
-                    }
-                    None => std::future::pending::<()>().await,
-                }
-            } => {
-                debug!("rfkill state changed");
-                true
-            }
-        };
-
-        if event_occurred
-            && token.alive()
-            && let Ok(new_data) = fetch_bluetooth_data(&conn).await
-        {
-            *data.lock_mut() = new_data;
+    let mut changes = select_all(changes);
+    while let Some(change) = changes.next().await {
+        debug!("Bluetooth {change}");
+        if let Ok(new_data) = fetch_bluetooth_data(&conn).await {
+            data.set(new_data);
         }
     }
 
     Ok(())
 }
 
-/// Set up rfkill monitoring via inotify.
-fn setup_rfkill_monitor() -> Option<mpsc::Receiver<()>> {
-    let mut inotify = Inotify::init().ok()?;
+/// rfkill soft-block changes, watched with inotify on the tokio reactor so
+/// the watch goes away with the run instead of parking a thread.
+fn rfkill_changes() -> Option<BoxStream<'static, &'static str>> {
+    let inotify = Inotify::init().ok()?;
     inotify
         .watches()
         .add("/dev/rfkill", WatchMask::MODIFY)
         .ok()?;
 
-    let (tx, rx) = mpsc::sync_channel(1);
-
-    thread::spawn(move || {
-        let mut buffer = [0; 512];
-        loop {
-            match inotify.read_events_blocking(&mut buffer) {
-                Ok(_events) => {
-                    let _ = tx.try_send(());
-                }
-                Err(e) => {
-                    error!("Error reading rfkill events: {}", e);
-                    break;
-                }
-            }
+    let events = match inotify.into_event_stream([0; 512]) {
+        Ok(events) => events,
+        Err(e) => {
+            error!("Error watching rfkill events: {}", e);
+            return None;
         }
-    });
+    };
 
-    Some(rx)
+    Some(
+        events
+            .take_while(|event| {
+                if let Err(e) = event {
+                    error!("Error reading rfkill events: {}", e);
+                }
+                std::future::ready(event.is_ok())
+            })
+            .map(|_| "rfkill state changed")
+            .boxed(),
+    )
 }

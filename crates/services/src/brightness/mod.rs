@@ -12,6 +12,7 @@ use tokio::io::unix::AsyncFd;
 use tracing::{debug, error, info, warn};
 use zbus::proxy;
 
+use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 
 /// Brightness data state.
@@ -51,12 +52,28 @@ pub enum BrightnessCommand {
 ///
 /// This subscriber monitors backlight brightness changes using udev
 /// and provides reactive state updates through `futures_signals`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BrightnessSubscriber {
     data: Mutable<BrightnessData>,
     lifecycle: Lifecycle,
+    jobs: JobQueue<BrightnessCommand>,
     /// Backlight device found by the last start, if any.
     device: Mutable<Option<PathBuf>>,
+}
+
+impl Default for BrightnessSubscriber {
+    fn default() -> Self {
+        Self {
+            data: Mutable::default(),
+            lifecycle: Lifecycle::default(),
+            // A slider drag only needs its last absolute value.
+            jobs: JobQueue::new("Brightness").coalesce(|older, newer| {
+                use BrightnessCommand::{Set, SetPercent};
+                matches!(older, Set(_) | SetPercent(_)) && matches!(newer, Set(_) | SetPercent(_))
+            }),
+            device: Mutable::default(),
+        }
+    }
 }
 
 impl BrightnessSubscriber {
@@ -81,8 +98,15 @@ impl BrightnessSubscriber {
         self.device.lock_ref().is_some()
     }
 
-    /// Execute a brightness command.
-    pub async fn dispatch(&self, command: BrightnessCommand) -> Result<()> {
+    /// Queue a brightness command. Failures are logged.
+    pub fn dispatch(&self, command: BrightnessCommand) {
+        self.jobs.send(command);
+    }
+
+    /// Commands run one at a time, and each one leaves its value in `data`
+    /// before the next starts, so relative steps build on each other
+    /// instead of all reading the same `current`.
+    async fn execute(&self, command: BrightnessCommand) -> Result<()> {
         let device_name = self
             .device
             .lock_ref()
@@ -182,6 +206,13 @@ impl ManagedService for BrightnessSubscriber {
 
         self.device.set(Some(device_path.clone()));
         token.active();
+
+        let subscriber = self.clone();
+        self.jobs.run(token.clone(), move |command| {
+            let subscriber = subscriber.clone();
+            async move { subscriber.execute(command).await }
+        });
+
         start_listener(self.data.clone(), device_path, token);
     }
 }
@@ -221,6 +252,9 @@ fn read_brightness(device_path: &Path) -> Result<BrightnessData> {
 }
 
 /// Start the udev listener task for brightness changes.
+///
+/// The udev socket is not `Send`, so it lives on a blocking-pool thread; the
+/// loop runs under the token so a stop releases that thread right away.
 fn start_listener(data: Mutable<BrightnessData>, device_path: PathBuf, token: RunToken) {
     tokio::task::spawn_blocking(move || {
         let socket = match udev::MonitorBuilder::new()
@@ -230,6 +264,7 @@ fn start_listener(data: Mutable<BrightnessData>, device_path: PathBuf, token: Ru
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to create udev monitor: {}", e);
+                token.error(e.to_string());
                 return;
             }
         };
@@ -239,6 +274,7 @@ fn start_listener(data: Mutable<BrightnessData>, device_path: PathBuf, token: Ru
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to create async fd: {}", e);
+                token.error(e.to_string());
                 return;
             }
         };
@@ -247,13 +283,14 @@ fn start_listener(data: Mutable<BrightnessData>, device_path: PathBuf, token: Ru
 
         // Use tokio's block_on to run async code in blocking context
         let runtime = tokio::runtime::Handle::current();
-        runtime.block_on(async {
-            while token.alive() {
+        runtime.block_on(token.run_until_cancelled(async {
+            loop {
                 // Wait asynchronously until the socket is readable
                 let mut guard = match async_socket.readable().await {
                     Ok(g) => g,
                     Err(e) => {
                         error!("Failed to wait for readable: {}", e);
+                        token.error(e.to_string());
                         break;
                     }
                 };
@@ -280,6 +317,6 @@ fn start_listener(data: Mutable<BrightnessData>, device_path: PathBuf, token: Ru
                     }
                 }
             }
-        });
+        }));
     });
 }

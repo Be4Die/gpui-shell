@@ -5,7 +5,7 @@
 
 use gpui::{App, ElementId, MouseButton, SharedString, div, prelude::*, px};
 use services::{BluetoothCommand, BluetoothDevice};
-use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize};
+use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, Spinner, TextSize};
 
 use crate::state::AppState;
 use zbus::zvariant::OwnedObjectPath;
@@ -18,6 +18,7 @@ pub fn render_bluetooth_section(cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let bluetooth = AppState::bluetooth(cx).get();
     let services_clone = AppState::bluetooth(cx).clone();
+    let pending = services_clone.pending();
     let discovering = bluetooth.discovering;
     let list_bg = theme.colors.background;
     let list_border = theme.colors.border_variant;
@@ -105,39 +106,25 @@ pub fn render_bluetooth_section(cx: &App) -> impl IntoElement {
                         let services_disconnect = services_clone.clone();
                         let services_pair = services_clone.clone();
                         let services_remove = services_clone.clone();
+                        let activity = device_activity(&pending, &device.path);
 
                         render_device_item(
                             idx,
                             device,
+                            activity,
                             cx,
-                            move |path, cx| {
-                                let s = services_connect.clone();
-                                cx.spawn(async move |_| {
-                                    let _ = s.dispatch(BluetoothCommand::ConnectDevice(path)).await;
-                                })
-                                .detach();
+                            move |path, _| {
+                                services_connect.dispatch(BluetoothCommand::ConnectDevice(path))
                             },
-                            move |path, cx| {
-                                let s = services_disconnect.clone();
-                                cx.spawn(async move |_| {
-                                    let _ =
-                                        s.dispatch(BluetoothCommand::DisconnectDevice(path)).await;
-                                })
-                                .detach();
+                            move |path, _| {
+                                services_disconnect
+                                    .dispatch(BluetoothCommand::DisconnectDevice(path))
                             },
-                            move |path, cx| {
-                                let s = services_pair.clone();
-                                cx.spawn(async move |_| {
-                                    let _ = s.dispatch(BluetoothCommand::PairDevice(path)).await;
-                                })
-                                .detach();
+                            move |path, _| {
+                                services_pair.dispatch(BluetoothCommand::PairDevice(path))
                             },
-                            move |path, cx| {
-                                let s = services_remove.clone();
-                                cx.spawn(async move |_| {
-                                    let _ = s.dispatch(BluetoothCommand::RemoveDevice(path)).await;
-                                })
-                                .detach();
+                            move |path, _| {
+                                services_remove.dispatch(BluetoothCommand::RemoveDevice(path))
                             },
                         )
                     })),
@@ -146,9 +133,24 @@ pub fn render_bluetooth_section(cx: &App) -> impl IntoElement {
 }
 
 /// Render a single device item in the list
+/// What the queue is doing to a device right now, as a row label.
+fn device_activity(pending: &[BluetoothCommand], path: &OwnedObjectPath) -> Option<&'static str> {
+    pending.iter().rev().find_map(|command| match command {
+        BluetoothCommand::ConnectDevice(p) if p == path => Some("Connecting..."),
+        BluetoothCommand::DisconnectDevice(p) if p == path => Some("Disconnecting..."),
+        BluetoothCommand::PairDevice(p) if p == path => Some("Pairing..."),
+        BluetoothCommand::RemoveDevice(p) if p == path => Some("Removing..."),
+        _ => None,
+    })
+}
+
+/// Render one device row. While `activity` is set the row shows it with a
+/// spinner in place of the actions, and ignores clicks.
+#[allow(clippy::too_many_arguments)]
 fn render_device_item(
     index: usize,
     device: BluetoothDevice,
+    activity: Option<&'static str>,
     cx: &App,
     on_connect: impl Fn(OwnedObjectPath, &mut App) + Clone + 'static,
     on_disconnect: impl Fn(OwnedObjectPath, &mut App) + Clone + 'static,
@@ -193,7 +195,7 @@ fn render_device_item(
         .on_mouse_down(MouseButton::Left, {
             let path = path.clone();
             move |_, _, cx| {
-                if connected {
+                if connected || activity.is_some() {
                     return;
                 }
 
@@ -244,20 +246,34 @@ fn render_device_item(
         .when_some(battery, |el, level| {
             el.child(render_battery_indicator(index, level, cx))
         })
-        .child(render_device_actions(
-            index,
-            connected,
-            paired,
-            path,
-            interactive_hover,
-            text_muted,
-            status_success,
-            on_connect,
-            on_disconnect,
-            on_pair,
-            on_remove,
-            cx,
-        ))
+        .when_some(activity, |el, label| {
+            el.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XSmall.pixels())
+                    .text_size(TextSize::XSmall.rems())
+                    .text_color(text_muted)
+                    .child(label)
+                    .child(Spinner::new().size(IconSize::XSmall)),
+            )
+        })
+        .when(activity.is_none(), |el| {
+            el.child(render_device_actions(
+                index,
+                connected,
+                paired,
+                path,
+                interactive_hover,
+                text_muted,
+                status_success,
+                on_connect,
+                on_disconnect,
+                on_pair,
+                on_remove,
+                cx,
+            ))
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -487,16 +503,12 @@ fn render_scan_button(discovering: bool, cx: &App) -> impl IntoElement {
         .cursor_pointer()
         .bg(bg_color)
         .hover(move |s| s.bg(hover_color))
-        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-            let s = services.clone();
-            cx.spawn(async move |_| {
-                let _ = if discovering {
-                    s.dispatch(BluetoothCommand::StopDiscovery).await
-                } else {
-                    s.dispatch(BluetoothCommand::StartDiscovery).await
-                };
-            })
-            .detach();
+        .on_mouse_down(MouseButton::Left, move |_, _, _| {
+            services.dispatch(if discovering {
+                BluetoothCommand::StopDiscovery
+            } else {
+                BluetoothCommand::StartDiscovery
+            });
         })
         .child(
             Icon::new(IconName::Refresh)

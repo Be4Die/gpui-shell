@@ -20,6 +20,7 @@ use zbus::{
 
 use crate::ServiceStatus;
 use crate::applications::icons::lookup_icon;
+use crate::jobs::JobQueue;
 use crate::lifecycle::{Lifecycle, ManagedService};
 
 const NAME: WellKnownName =
@@ -27,6 +28,11 @@ const NAME: WellKnownName =
 const OBJECT_PATH: &str = "/org/freedesktop/Notifications";
 const DEFAULT_TIMEOUT_MS: i32 = 5000;
 const MAX_NOTIFICATION_HISTORY: usize = 200;
+
+/// Held while claiming or releasing the bus name and object path, so a stop
+/// followed quickly by a start cannot interleave and let the stop's late
+/// release tear down the new server.
+static REGISTRATION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A single desktop notification.
 #[derive(Debug, Clone, Default)]
@@ -98,6 +104,7 @@ pub enum NotificationCommand {
 pub struct NotificationSubscriber {
     data: Mutable<NotificationData>,
     lifecycle: Lifecycle,
+    jobs: JobQueue<NotificationCommand>,
 }
 
 impl NotificationSubscriber {
@@ -176,28 +183,11 @@ impl NotificationSubscriber {
         }
     }
 
-    pub async fn dispatch(&self, command: NotificationCommand) -> anyhow::Result<()> {
+    /// Apply a command. State-only commands take effect immediately, and so
+    /// does everything while the daemon is down - the history is ours either
+    /// way. Commands that have to tell a client go through the queue.
+    pub fn dispatch(&self, command: NotificationCommand) {
         match command {
-            NotificationCommand::Dismiss(id) => {
-                self.dismiss_by_id(id).await?;
-            }
-            NotificationCommand::DismissLatest => {
-                if let Some(id) = self.data.lock_ref().notifications.first().map(|n| n.id) {
-                    self.dismiss_by_id(id).await?;
-                }
-            }
-            NotificationCommand::DismissAll => {
-                let ids: Vec<u32> = self
-                    .data
-                    .lock_ref()
-                    .notifications
-                    .iter()
-                    .map(|n| n.id)
-                    .collect();
-                for id in ids {
-                    self.dismiss_by_id(id).await?;
-                }
-            }
             NotificationCommand::SetDnd(enabled) => {
                 let mut data = self.data.lock_mut();
                 data.dnd = enabled;
@@ -212,12 +202,40 @@ impl NotificationSubscriber {
                 }
                 data.recompute_unread();
             }
-            NotificationCommand::InvokeAction(id, action_key) => {
-                self.emit_action_invoked(id, &action_key).await;
-                self.dismiss_by_id(id).await?;
+            command if !self.lifecycle.is_up() => {
+                for id in self.target_ids(&command) {
+                    remove_notification(&self.data, id);
+                }
             }
+            command => self.jobs.send(command),
         }
+    }
 
+    /// The notifications a dismissing command acts on.
+    fn target_ids(&self, command: &NotificationCommand) -> Vec<u32> {
+        let data = self.data.lock_ref();
+        match command {
+            NotificationCommand::Dismiss(id) | NotificationCommand::InvokeAction(id, _) => {
+                vec![*id]
+            }
+            NotificationCommand::DismissLatest => data
+                .notifications
+                .first()
+                .map(|n| n.id)
+                .into_iter()
+                .collect(),
+            NotificationCommand::DismissAll => data.notifications.iter().map(|n| n.id).collect(),
+            NotificationCommand::SetDnd(_) | NotificationCommand::MarkAllRead => Vec::new(),
+        }
+    }
+
+    async fn execute(&self, command: NotificationCommand) -> anyhow::Result<()> {
+        if let NotificationCommand::InvokeAction(id, action_key) = &command {
+            self.emit_action_invoked(*id, action_key).await;
+        }
+        for id in self.target_ids(&command) {
+            self.dismiss_by_id(id).await?;
+        }
         Ok(())
     }
 
@@ -291,7 +309,18 @@ impl ManagedService for NotificationSubscriber {
         let token = self.lifecycle.begin();
         let data = self.data.clone();
 
+        let subscriber = self.clone();
+        self.jobs.run(token.clone(), move |command| {
+            let subscriber = subscriber.clone();
+            async move { subscriber.execute(command).await }
+        });
+
         tokio::spawn(async move {
+            let _registration = REGISTRATION.lock().await;
+            if !token.alive() {
+                return;
+            }
+
             let conn = match crate::bus::session().await {
                 Ok(conn) => conn,
                 Err(e) => {
@@ -340,7 +369,13 @@ impl ManagedService for NotificationSubscriber {
     fn stop(&self) {
         self.lifecycle.stop();
 
+        let lifecycle = self.lifecycle.clone();
         tokio::spawn(async move {
+            let _registration = REGISTRATION.lock().await;
+            // Started again before this ran: the new run owns the name now.
+            if !lifecycle.is_stopped() {
+                return;
+            }
             let Ok(conn) = crate::bus::session().await else {
                 return;
             };
@@ -366,10 +401,11 @@ struct NotificationServer {
 
 impl NotificationServer {
     fn new(data: Mutable<NotificationData>, conn: Connection) -> Self {
+        let next_id = first_free_id(&data.lock_ref());
         Self {
             data,
             conn,
-            next_id: 1,
+            next_id,
             next_timer_generation: 1,
             timer_generations: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -583,6 +619,21 @@ impl NotificationServer {
     ) -> zbus::Result<()>;
 }
 
+/// The id a new daemon run starts counting from.
+///
+/// History outlives a restart, and `Notify` replaces any entry with the id
+/// it hands out, so counting from 1 again would quietly delete old entries.
+/// Local slot ids live at the top of the range and are skipped.
+fn first_free_id(data: &NotificationData) -> u32 {
+    let lowest_slot = LocalSlot::ConfigError.id().min(LocalSlot::ThemeError.id());
+    data.notifications
+        .iter()
+        .map(|n| n.id)
+        .filter(|id| *id < lowest_slot)
+        .max()
+        .map_or(1, |id| id.saturating_add(1))
+}
+
 fn remove_notification(data: &Mutable<NotificationData>, id: u32) -> bool {
     let mut state = data.lock_mut();
     let len_before = state.notifications.len();
@@ -773,5 +824,25 @@ mod tests {
             normalize_path("file:///tmp/My%20%C3%A9.png"),
             PathBuf::from("/tmp/My é.png"),
         );
+    }
+
+    /// A restarted daemon must not hand out ids still in the history: `Notify`
+    /// replaces whatever holds the id, which deleted old entries.
+    #[test]
+    fn a_restart_keeps_counting_past_the_history() {
+        let notifications = NotificationSubscriber::new();
+        assert_eq!(first_free_id(&notifications.get()), 1);
+
+        notifications.post_local(LocalSlot::ConfigError, "bad".into(), String::new());
+        {
+            let mut data = notifications.data.lock_mut();
+            for id in [3, 7] {
+                data.notifications.push(Notification {
+                    id,
+                    ..Notification::default()
+                });
+            }
+        }
+        assert_eq!(first_free_id(&notifications.get()), 8);
     }
 }

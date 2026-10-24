@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use tracing::{debug, error, info, warn};
+
+use crate::lifecycle::RunToken;
 use zbus::{
     Connection, Result,
     fdo::{DBusProxy, RequestNameFlags, RequestNameReply},
@@ -27,7 +29,11 @@ pub struct StatusNotifierWatcher {
 
 impl StatusNotifierWatcher {
     /// Start the StatusNotifierWatcher D-Bus server.
-    pub async fn start_server() -> anyhow::Result<Connection> {
+    ///
+    /// The object and the bus name stay registered across restarts (a second
+    /// `at` or `request_name` is a no-op), but the task that tracks them
+    /// belongs to `token`'s run, so a restart no longer adds another.
+    pub async fn start_server(token: &RunToken) -> anyhow::Result<Connection> {
         let connection = crate::bus::session().await?;
         let watcher = StatusNotifierWatcher::default();
         connection.object_server().at(OBJECT_PATH, watcher).await?;
@@ -46,7 +52,9 @@ impl StatusNotifierWatcher {
 
         let internal_connection = connection.clone();
         let internal_interface = interface.clone();
+        let token = token.clone();
         tokio::spawn(async move {
+            token.run_until_cancelled(async move {
             let mut have_bus_name = false;
             let unique_name = internal_connection.unique_name().map(|x| x.as_ref());
 
@@ -97,6 +105,7 @@ impl StatusNotifierWatcher {
                     }
                 }
             }
+        }).await;
         });
 
         // Initial discovery

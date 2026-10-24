@@ -195,6 +195,8 @@ pub struct NetworkData {
     pub connectivity: ConnectivityState,
     /// Network traffic statistics per device.
     pub network_statistics: Vec<NetworkStatistics>,
+    /// A WiFi scan was requested and has not reported back yet.
+    pub scanning: bool,
 }
 
 impl Default for NetworkData {
@@ -205,6 +207,7 @@ impl Default for NetworkData {
             wireless_access_points: Vec::new(),
             connectivity: ConnectivityState::Unknown,
             network_statistics: Vec::new(),
+            scanning: false,
         }
     }
 }

@@ -12,7 +12,6 @@ use crate::config::{ActiveConfig, Config};
 use crate::panel::{PanelConfig, panel_placement_from_event, toggle_panel};
 use crate::state::{AppState, watch};
 
-use super::dispatch_notification_command;
 use super::panel::NotificationCenter;
 
 /// Notification widget for the bar.
@@ -44,7 +43,7 @@ impl NotificationWidget {
         let (anchor, margin) =
             panel_placement_from_event(config.bar.position, at, window, cx, panel_size);
         let subscriber = self.subscriber.clone();
-        dispatch_notification_command(subscriber.clone(), NotificationCommand::MarkAllRead);
+        subscriber.dispatch(NotificationCommand::MarkAllRead);
 
         let panel_config = PanelConfig {
             width: notification_config.center_width,

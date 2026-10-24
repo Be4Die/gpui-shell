@@ -129,13 +129,7 @@ pub fn render_quick_toggles(
                     wifi_enabled,
                     expanded == ExpandedSection::WiFi,
                     cx,
-                    move |cx| {
-                        let services = services_wifi.clone();
-                        cx.spawn(async move |_| {
-                            let _ = services.dispatch(NetworkCommand::ToggleWifi).await;
-                        })
-                        .detach();
-                    },
+                    move |_| services_wifi.dispatch(NetworkCommand::ToggleWifi),
                     move |cx| {
                         on_toggle_wifi(ExpandedSection::WiFi, cx);
                     },
@@ -152,13 +146,7 @@ pub fn render_quick_toggles(
                     bt_active,
                     expanded == ExpandedSection::Bluetooth,
                     cx,
-                    move |cx| {
-                        let services = services_bt.clone();
-                        cx.spawn(async move |_| {
-                            let _ = services.dispatch(BluetoothCommand::Toggle).await;
-                        })
-                        .detach();
-                    },
+                    move |_| services_bt.dispatch(BluetoothCommand::Toggle),
                     move |cx| {
                         on_toggle_bt(ExpandedSection::Bluetooth, cx);
                     },

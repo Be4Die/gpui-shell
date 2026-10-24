@@ -34,11 +34,15 @@ Every service works the same way (the strip at the bottom of the diagram):
 
 - **Read:** `AppState::audio(cx).subscribe()`, passed to `state::watch`, which
   updates the widget and calls `cx.notify()`. Use `.get()` for a one-off read.
-- **Write:** widgets call `dispatch(Command)`, never mutate state. The result
-  comes back through the same signal.
+- **Write:** widgets call `dispatch(Command)`, never mutate state. It queues
+  the command on the service's `JobQueue` (`services/src/jobs.rs`), whose
+  worker runs commands one at a time; the result comes back through the same
+  signal. `request(Command)` awaits the outcome instead, and the queue's
+  in-flight list drives progress indicators.
 - **Lifecycle:** `ManagedService` (`services/src/lifecycle.rs`). Each
-  `start()` gets a fresh `RunToken`, and listeners exit once
-  `token.alive()` is false. Startup mode per service is `eager`, `lazy` or
+  `start()` gets a fresh `RunToken`; the run, and its command worker, end
+  the moment it is stopped or restarted (`token.run_until_cancelled`), not at
+  the next event. Startup mode per service is `eager`, `lazy` or
   `off` (`[services]` in config), and the `;s` launcher view controls them
   at runtime.
 

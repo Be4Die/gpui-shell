@@ -8,7 +8,6 @@ use crate::config::ActiveConfig;
 use crate::state::watch;
 
 use super::card::notification_card_body;
-use super::dispatch_notification_command;
 
 pub(super) struct NotificationCenter {
     subscriber: NotificationSubscriber,
@@ -65,10 +64,8 @@ impl Render for NotificationCenter {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |_, _, _, _cx| {
-                                        dispatch_notification_command(
-                                            dismiss_subscriber.clone(),
-                                            NotificationCommand::Dismiss(id),
-                                        );
+                                        dismiss_subscriber
+                                            .dispatch(NotificationCommand::Dismiss(id));
                                     }),
                                 )
                                 .child(
@@ -119,10 +116,9 @@ impl Render for NotificationCenter {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |_, _, _, _cx| {
-                                            dispatch_notification_command(
-                                                dnd_subscriber.clone(),
-                                                NotificationCommand::SetDnd(!dnd_enabled),
-                                            );
+                                            dnd_subscriber.dispatch(NotificationCommand::SetDnd(
+                                                !dnd_enabled,
+                                            ));
                                         }),
                                     )
                                     .child(
@@ -143,10 +139,8 @@ impl Render for NotificationCenter {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |_, _, _, _cx| {
-                                            dispatch_notification_command(
-                                                clear_subscriber.clone(),
-                                                NotificationCommand::DismissAll,
-                                            );
+                                            clear_subscriber
+                                                .dispatch(NotificationCommand::DismissAll);
                                         }),
                                     )
                                     .child("Clear"),

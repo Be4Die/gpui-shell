@@ -3,8 +3,6 @@ use gpui::{Context, MouseButton, div, img, px};
 use services::{Notification, NotificationCommand, NotificationSubscriber};
 use ui::{ActiveTheme, Radius, Spacing, TextSize};
 
-use super::dispatch_notification_command;
-
 pub(super) fn notification_card_body<V>(
     notification: &Notification,
     cx: &Context<V>,
@@ -195,13 +193,10 @@ pub(super) fn notification_card_body<V>(
                                             .text_color(theme.colors.text)
                                     })
                                     .on_mouse_down(MouseButton::Left, move |_, _, _| {
-                                        dispatch_notification_command(
-                                            sub.clone(),
-                                            NotificationCommand::InvokeAction(
-                                                notification_id,
-                                                key.clone(),
-                                            ),
-                                        );
+                                        sub.dispatch(NotificationCommand::InvokeAction(
+                                            notification_id,
+                                            key.clone(),
+                                        ));
                                     })
                                     .child(label)
                             })),

@@ -85,8 +85,11 @@ impl ControlCenter {
             cx.notify();
         });
 
-        // Bluetooth
+        // Bluetooth, and its queued commands for per-device progress
         watch(cx, AppState::bluetooth(cx).subscribe(), |_, _, cx| {
+            cx.notify();
+        });
+        watch(cx, AppState::bluetooth(cx).pending_signal(), |_, _, cx| {
             cx.notify();
         });
 
@@ -147,13 +150,7 @@ impl Render for ControlCenter {
 
         let on_cycle_power_profile: Rc<dyn Fn(&mut App)> = Rc::new({
             let services = AppState::upower(cx).clone();
-            move |cx: &mut App| {
-                let s = services.clone();
-                cx.spawn(async move |_| {
-                    let _ = s.dispatch(UPowerCommand::CyclePowerProfile).await;
-                })
-                .detach();
-            }
+            move |_: &mut App| services.dispatch(UPowerCommand::CyclePowerProfile)
         });
 
         // WiFi callbacks
@@ -176,16 +173,17 @@ impl Render for ControlCenter {
                         let entity = entity.clone();
                         async move |cx| {
                             let result = services
-                                .dispatch(NetworkCommand::Connect { ssid, password })
+                                .request(NetworkCommand::Connect { ssid, password })
                                 .await;
 
                             entity.update(cx, |this, cx| {
                                 this.wifi_password.connecting = false;
-                                if result.is_ok() {
-                                    this.wifi_password.clear();
-                                } else {
-                                    this.wifi_password.error =
-                                        Some("Connection failed".to_string());
+                                match result {
+                                    Ok(()) => this.wifi_password.clear(),
+                                    Err(e) => {
+                                        this.wifi_password.error =
+                                            Some(format!("Connection failed: {e}"));
+                                    }
                                 }
                                 cx.notify();
                             });
@@ -204,13 +202,7 @@ impl Render for ControlCenter {
 
         let on_wifi_disconnect: WifiDisconnectCallback = Rc::new({
             let services = wifi_services.clone();
-            move |ssid: String, cx: &mut App| {
-                let s = services.clone();
-                cx.spawn(async move |_| {
-                    let _ = s.dispatch(NetworkCommand::Disconnect(ssid)).await;
-                })
-                .detach();
-            }
+            move |ssid: String, _: &mut App| services.dispatch(NetworkCommand::Disconnect(ssid))
         });
 
         let on_cancel_password: Rc<dyn Fn(&mut App)> = Rc::new({
@@ -488,16 +480,17 @@ impl Render for ControlCenter {
                                     let entity = cx.entity().clone();
                                     async move |_, cx| {
                                         let result = services
-                                            .dispatch(NetworkCommand::Connect { ssid, password })
+                                            .request(NetworkCommand::Connect { ssid, password })
                                             .await;
 
                                         entity.update(cx, |this, cx| {
                                             this.wifi_password.connecting = false;
-                                            if result.is_ok() {
-                                                this.wifi_password.clear();
-                                            } else {
-                                                this.wifi_password.error =
-                                                    Some("Connection failed".to_string());
+                                            match result {
+                                                Ok(()) => this.wifi_password.clear(),
+                                                Err(e) => {
+                                                    this.wifi_password.error =
+                                                        Some(format!("Connection failed: {e}"));
+                                                }
                                             }
                                             cx.notify();
                                         });

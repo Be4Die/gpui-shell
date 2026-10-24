@@ -189,13 +189,14 @@ fn start_listener(data: Mutable<SysInfoData>, token: RunToken) {
                 &mut last_transmitted,
             );
 
-            // Only update if changed
+            // Only update if changed. Through the token: a stop can land during
+            // the sleep, and this thread must not publish after it.
             if *data.lock_ref() != new_data {
                 debug!(
                     "SysInfo updated: CPU {}%, MEM {}%, TEMP {:?}°C",
                     new_data.cpu_usage, new_data.memory_usage, new_data.temperature
                 );
-                *data.lock_mut() = new_data;
+                token.write(&data, |data| *data = new_data);
             }
 
             thread::sleep(Duration::from_secs(2));

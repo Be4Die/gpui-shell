@@ -17,7 +17,6 @@ use crate::state::AppState;
 
 use super::card::notification_card_body;
 use super::config::{NotificationConfig, NotificationPopupPosition};
-use super::dispatch_notification_command;
 
 static POPUP_STATE: LazyLock<Mutex<HashMap<Option<DisplayId>, PopupWindowState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -85,10 +84,8 @@ impl Render for NotificationPopupStack {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(move |_, _, _, _cx| {
-                                            dispatch_notification_command(
-                                                dismiss_subscriber.clone(),
-                                                NotificationCommand::Dismiss(id),
-                                            );
+                                            dismiss_subscriber
+                                                .dispatch(NotificationCommand::Dismiss(id));
                                         }),
                                     )
                                     .child(

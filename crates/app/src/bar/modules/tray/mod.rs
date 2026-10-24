@@ -159,24 +159,15 @@ impl Tray {
             });
         } else {
             // No menu — activate the item directly (e.g. show window)
-            let subscriber = self.subscriber.clone();
-            let item_name = item.name.clone();
-            cx.spawn(async move |_| {
-                let _ = subscriber
-                    .dispatch(TrayCommand::Activate { item_name })
-                    .await;
-            })
-            .detach();
+            self.subscriber.dispatch(TrayCommand::Activate {
+                item_name: item.name.clone(),
+            });
         }
     }
 
-    /// Dispatch a tray command asynchronously.
-    fn dispatch_command(&self, command: TrayCommand, cx: &mut App) {
-        let subscriber = self.subscriber.clone();
-        cx.spawn(async move |_| {
-            let _ = subscriber.dispatch(command).await;
-        })
-        .detach();
+    /// Queue a tray command.
+    fn dispatch_command(&self, command: TrayCommand) {
+        self.subscriber.dispatch(command);
     }
 
     fn render_tray_item(
@@ -222,7 +213,7 @@ impl Tray {
         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             this.on_item_click(&item, event.position(), window, cx);
         }))
-        .on_aux_click(cx.listener(move |this, event: &ClickEvent, _window, cx| {
+        .on_aux_click(cx.listener(move |this, event: &ClickEvent, _window, _cx| {
             let command = if event.is_middle_click() {
                 TrayCommand::SecondaryActivate {
                     item_name: aux_item_name.clone(),
@@ -234,7 +225,7 @@ impl Tray {
             } else {
                 return;
             };
-            this.dispatch_command(command, cx);
+            this.dispatch_command(command);
         }))
         .child(icon_element)
         .into_any_element()
@@ -330,15 +321,11 @@ impl TrayMenuPanel {
     }
 
     /// Handle clicking on a menu item.
-    fn activate_menu_item(&self, menu_id: i32, window: &mut Window, cx: &mut Context<Self>) {
-        let subscriber = self.subscriber.clone();
-        let item_name = self.item_name.clone();
-        cx.spawn(async move |_, _| {
-            let _ = subscriber
-                .dispatch(TrayCommand::MenuItemClicked { item_name, menu_id })
-                .await;
-        })
-        .detach();
+    fn activate_menu_item(&self, menu_id: i32, window: &mut Window) {
+        self.subscriber.dispatch(TrayCommand::MenuItemClicked {
+            item_name: self.item_name.clone(),
+            menu_id,
+        });
 
         // Close the menu panel
         window.remove_window();
@@ -351,14 +338,10 @@ impl TrayMenuPanel {
             self.expanded_submenus.remove(pos);
         } else {
             // Notify the app to populate the submenu before expanding
-            let subscriber = self.subscriber.clone();
-            let item_name = self.item_name.clone();
-            cx.spawn(async move |_, _| {
-                let _ = subscriber
-                    .dispatch(TrayCommand::AboutToShow { item_name, menu_id })
-                    .await;
-            })
-            .detach();
+            self.subscriber.dispatch(TrayCommand::AboutToShow {
+                item_name: self.item_name.clone(),
+                menu_id,
+            });
             self.expanded_submenus.push(menu_id);
         }
         cx.notify();
@@ -476,7 +459,7 @@ fn render_menu_item(
         if has_submenu {
             this.toggle_submenu(menu_id, cx);
         } else {
-            this.activate_menu_item(menu_id, window, cx);
+            this.activate_menu_item(menu_id, window);
         }
     }))
     .when_some(toggle_indicator, |el, (icon, is_checked)| {

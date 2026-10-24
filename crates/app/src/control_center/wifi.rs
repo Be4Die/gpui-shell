@@ -6,7 +6,7 @@
 use gpui::{App, ElementId, MouseButton, SharedString, div, prelude::*, px};
 use services::{AccessPoint, NetworkCommand};
 use ui::{
-    ActiveTheme, Color, Icon, IconName, IconSize, InputBuffer, Radius, Spacing, TextSize,
+    ActiveTheme, Color, Icon, IconName, IconSize, InputBuffer, Radius, Spacing, Spinner, TextSize,
     render_masked_input_line,
 };
 
@@ -73,6 +73,7 @@ pub fn render_wifi_section(
         }
     });
     let wifi_enabled = network.wifi_enabled;
+    let scanning = network.scanning;
 
     // Sort access points: connected first, then by signal strength
     let mut aps: Vec<AccessPoint> = network.wireless_access_points.clone();
@@ -118,8 +119,16 @@ pub fn render_wifi_section(
                             .child(format!("- {}", name)),
                     )
                 })
-                .child(render_refresh_button(cx)),
+                .child(render_refresh_button(scanning, cx)),
         )
+        .when(wifi_enabled && scanning, |el| {
+            el.child(
+                div()
+                    .text_size(TextSize::XSmall.rems())
+                    .text_color(theme.colors.text_muted)
+                    .child("Scanning..."),
+            )
+        })
         .when(!wifi_enabled, |el| {
             el.child(
                 div()
@@ -510,8 +519,9 @@ fn render_password_input(
         })
 }
 
-/// Render a refresh button for rescanning networks
-pub fn render_refresh_button(cx: &App) -> impl IntoElement {
+/// Render a refresh button for rescanning networks. It spins, and ignores
+/// clicks, while a scan is running.
+pub fn render_refresh_button(scanning: bool, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     let services = AppState::network(cx).clone();
 
@@ -527,19 +537,25 @@ pub fn render_refresh_button(cx: &App) -> impl IntoElement {
         .w(px(24.))
         .h(px(24.))
         .rounded(Radius::Small.pixels())
-        .cursor_pointer()
         .bg(interactive_default)
-        .hover(move |s| s.bg(interactive_hover))
-        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-            let s = services.clone();
-            cx.spawn(async move |_| {
-                let _ = s.dispatch(NetworkCommand::RequestScan).await;
-            })
-            .detach();
+        .when(scanning, |el| {
+            el.child(
+                Spinner::new()
+                    .icon(IconName::Refresh)
+                    .size(IconSize::XSmall)
+                    .color(Color::Muted),
+            )
         })
-        .child(
-            Icon::new(IconName::Refresh)
-                .size(IconSize::XSmall)
-                .color(Color::Muted),
-        )
+        .when(!scanning, |el| {
+            el.cursor_pointer()
+                .hover(move |s| s.bg(interactive_hover))
+                .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                    services.dispatch(NetworkCommand::RequestScan);
+                })
+                .child(
+                    Icon::new(IconName::Refresh)
+                        .size(IconSize::XSmall)
+                        .color(Color::Muted),
+                )
+        })
 }

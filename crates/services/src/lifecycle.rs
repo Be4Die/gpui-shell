@@ -7,12 +7,18 @@
 //! replaced: [`Lifecycle::begin`] hands the listener a [`RunToken`] tied to a
 //! generation counter, and stopping or restarting bumps that counter so the
 //! previous listener sees `alive() == false` and bows out.
+//!
+//! The counter lives in a `watch` channel so a listener parked on a quiet
+//! stream does not have to wait for its next event to notice: wrapping the
+//! run in [`RunToken::run_until_cancelled`] drops it the moment the
+//! generation moves on.
 
+use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures_signals::signal::{Mutable, MutableSignalCloned};
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 use crate::ServiceStatus;
 
@@ -48,7 +54,7 @@ pub struct Lifecycle {
     mode: Mutable<ServiceMode>,
     /// Incremented on every start and stop. A listener whose token no longer
     /// matches has been superseded and must exit.
-    generation: Arc<AtomicU64>,
+    generation: Arc<watch::Sender<u64>>,
 }
 
 impl Lifecycle {
@@ -56,8 +62,17 @@ impl Lifecycle {
         Self {
             status: Mutable::new(ServiceStatus::Stopped),
             mode: Mutable::new(mode),
-            generation: Arc::new(AtomicU64::new(0)),
+            generation: Arc::new(watch::Sender::new(0)),
         }
+    }
+
+    fn bump(&self) -> u64 {
+        let mut id = 0;
+        self.generation.send_modify(|generation| {
+            *generation += 1;
+            id = *generation;
+        });
+        id
     }
 
     pub fn status(&self) -> ServiceStatus {
@@ -97,10 +112,10 @@ impl Lifecycle {
     /// The returned token carries the status handle, so listeners report
     /// through it and stale runs are silently ignored.
     pub fn begin(&self) -> RunToken {
-        let id = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let id = self.bump();
         let token = RunToken {
             status: self.status.clone(),
-            generation: self.generation.clone(),
+            generation: self.generation.subscribe(),
             id,
         };
         token.set(ServiceStatus::Initializing);
@@ -109,13 +124,13 @@ impl Lifecycle {
 
     /// Stop the current run and mark the service stopped.
     pub fn stop(&self) {
-        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.bump();
         self.status.set_neq(ServiceStatus::Stopped);
     }
 
     /// Mark a service that has no work to do on this system.
     pub fn set_unavailable(&self) {
-        self.generation.fetch_add(1, Ordering::SeqCst);
+        self.bump();
         self.status.set_neq(ServiceStatus::Unavailable);
     }
 }
@@ -134,14 +149,45 @@ impl Default for Lifecycle {
 #[derive(Debug, Clone)]
 pub struct RunToken {
     status: Mutable<ServiceStatus>,
-    generation: Arc<AtomicU64>,
+    generation: watch::Receiver<u64>,
     id: u64,
 }
 
 impl RunToken {
     /// False once the service was stopped or restarted: exit the listener.
     pub fn alive(&self) -> bool {
-        self.generation.load(Ordering::SeqCst) == self.id
+        *self.generation.borrow() == self.id
+    }
+
+    /// Resolves once the service is stopped or restarted.
+    pub async fn cancelled(&self) {
+        let id = self.id;
+        let mut generation = self.generation.clone();
+        // An error means the lifecycle itself is gone, which ends the run too.
+        let _ = generation.wait_for(|current| *current != id).await;
+    }
+
+    /// Drive `fut` until it completes or this run is superseded.
+    ///
+    /// On cancellation `fut` is dropped at its current await point, so a
+    /// listener parked on a quiet stream releases its thread, proxies and
+    /// match rules right away, and none of its pending writes can land.
+    pub async fn run_until_cancelled<F: Future>(&self, fut: F) -> Option<F::Output> {
+        tokio::select! {
+            biased;
+            _ = self.cancelled() => None,
+            output = fut => Some(output),
+        }
+    }
+
+    /// Mutate `data` only while this run is current.
+    ///
+    /// For listeners that cannot be dropped mid-run (blocking threads), so a
+    /// stale one never overwrites what the next run published.
+    pub fn write<T>(&self, data: &Mutable<T>, f: impl FnOnce(&mut T)) {
+        if self.alive() {
+            f(&mut data.lock_mut());
+        }
     }
 
     pub fn set(&self, status: ServiceStatus) {
@@ -239,5 +285,50 @@ mod tests {
 
         second.active();
         assert_eq!(lifecycle.status(), ServiceStatus::Stopped);
+    }
+
+    #[tokio::test]
+    async fn stop_wakes_a_parked_run() {
+        let lifecycle = Lifecycle::new(ServiceMode::Eager);
+        let token = lifecycle.begin();
+
+        // A listener parked on a stream that never yields.
+        let run = tokio::spawn({
+            let token = token.clone();
+            async move {
+                token
+                    .run_until_cancelled(std::future::pending::<()>())
+                    .await
+            }
+        });
+
+        tokio::task::yield_now().await;
+        lifecycle.stop();
+        assert_eq!(run.await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn restart_cancels_only_the_previous_run() {
+        let lifecycle = Lifecycle::new(ServiceMode::Eager);
+        let first = lifecycle.begin();
+        let second = lifecycle.begin();
+
+        first.cancelled().await;
+        assert_eq!(second.run_until_cancelled(async { 7 }).await, Some(7));
+    }
+
+    #[test]
+    fn stale_writes_are_dropped() {
+        let lifecycle = Lifecycle::new(ServiceMode::Eager);
+        let data = Mutable::new(0);
+
+        let first = lifecycle.begin();
+        first.write(&data, |v| *v = 1);
+        let second = lifecycle.begin();
+        first.write(&data, |v| *v = 2);
+        assert_eq!(data.get(), 1);
+
+        second.write(&data, |v| *v = 3);
+        assert_eq!(data.get(), 3);
     }
 }
