@@ -9,7 +9,6 @@ use std::{
     env,
     io::{BufRead, BufReader, Write as _},
     os::unix::net::UnixStream,
-    thread,
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -19,7 +18,9 @@ use niri_ipc::{
     Action, Event, Reply, Request, WorkspaceReferenceArg,
     state::{EventStreamState, EventStreamStatePart},
 };
-use tracing::{debug, error, info};
+use tracing::{debug, info};
+
+use crate::lifecycle::RunToken;
 
 use super::types::{ActiveWindow, CompositorCommand, CompositorState, Monitor, Window, Workspace};
 
@@ -135,20 +136,14 @@ pub fn fetch_full_state() -> Result<CompositorState> {
     Ok(map_state(&internal_state))
 }
 
-/// Start the Niri event listener in a dedicated thread.
-///
-/// Spawns a thread that connects to the niri event stream and continuously
-/// updates the shared `Mutable<CompositorState>` as events arrive.
-pub fn start_listener(data: Mutable<CompositorState>) {
-    thread::spawn(move || {
-        if let Err(e) = run_listener(data) {
-            error!("Niri event listener error: {}", e);
-        }
-    });
+/// Follow niri's event stream on a dedicated thread. Each connection opens
+/// with the full state, so a retry after EOF resyncs on its own.
+pub fn start_listener(data: Mutable<CompositorState>, token: RunToken) {
+    token.supervise_blocking("Niri", move |token| run_listener(&data, token));
 }
 
 /// Run the blocking event listener loop.
-fn run_listener(data: Mutable<CompositorState>) -> Result<()> {
+fn run_listener(data: &Mutable<CompositorState>, token: &RunToken) -> Result<()> {
     info!("Starting Niri event listener");
 
     let mut stream = connect()?;
@@ -170,6 +165,7 @@ fn run_listener(data: Mutable<CompositorState>) -> Result<()> {
 
     // Shutdown write half
     reader.get_ref().shutdown(std::net::Shutdown::Write).ok();
+    token.active();
 
     let mut internal_state = EventStreamState::default();
 
@@ -178,7 +174,7 @@ fn run_listener(data: Mutable<CompositorState>) -> Result<()> {
         line.clear();
         let bytes_read = reader.read_line(&mut line)?;
         if bytes_read == 0 {
-            break; // EOF — niri disconnected
+            anyhow::bail!("Niri event stream closed");
         }
 
         let event: Event = match serde_json::from_str(&line) {
@@ -197,9 +193,6 @@ fn run_listener(data: Mutable<CompositorState>) -> Result<()> {
         let state = map_state(&internal_state);
         data.set_neq(state);
     }
-
-    info!("Niri event stream ended");
-    Ok(())
 }
 
 /// Connect to the niri IPC socket.

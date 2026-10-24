@@ -14,8 +14,8 @@ use hyprland::{
     prelude::*,
 };
 use itertools::Itertools;
-use std::thread;
-use tracing::{debug, error, info};
+use crate::lifecycle::RunToken;
+use tracing::{debug, info};
 
 use super::types::{ActiveWindow, CompositorCommand, CompositorState, Monitor, Workspace};
 
@@ -199,13 +199,17 @@ pub fn fetch_full_state() -> Result<CompositorState> {
     })
 }
 
-/// Start the Hyprland event listener in a dedicated thread.
-/// Uses sync EventListener with direct Mutable mutation for efficiency.
-pub fn start_listener(data: Mutable<CompositorState>) {
-    thread::spawn(move || {
-        if let Err(e) = run_listener(data) {
-            error!("Hyprland event listener error: {}", e);
+/// Follow Hyprland's event socket on a dedicated thread. The socket closing
+/// fails the attempt, and the retry refetches whatever it missed.
+pub fn start_listener(data: Mutable<CompositorState>, token: RunToken) {
+    let mut resync = false;
+    token.supervise_blocking("Hyprland", move |token| {
+        if std::mem::replace(&mut resync, true) {
+            data.set_neq(fetch_full_state()?);
         }
+        token.active();
+        run_listener(data.clone())?;
+        anyhow::bail!("Hyprland event socket closed")
     });
 }
 

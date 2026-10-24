@@ -219,8 +219,6 @@ impl Dock {
     }
 
     /// Whether the dock should be hidden for the configured visibility mode.
-    /// `DodgeWindows` uses the intelligent-hide behavior when the compositor
-    /// cannot report window geometry, as with Niri.
     fn hide_behavior(
         &self,
         window: &Window,
@@ -252,21 +250,15 @@ impl Dock {
                 }
             }
             config::DockVisibility::DodgeWindows => dodge_windows_hide_behavior(
-                focused_window,
-                monitor_name.as_deref(),
+                &self.state.windows,
                 monitor_name.as_deref().and_then(|monitor_name| {
                     self.state
                         .monitors
                         .iter()
                         .find(|monitor| monitor.name == monitor_name)
-                        .map(|monitor| {
-                            dock_bounds_in_compositor_space(
-                                cx.config().dock.position,
-                                dock_size,
-                                monitor,
-                            )
-                        })
                 }),
+                cx.config().dock.position,
+                dock_size,
             ),
         }
     }
@@ -754,33 +746,120 @@ mod tests {
         ));
     }
 
+    /// A 1920x1080 monitor at the origin showing workspace 1.
+    fn monitor() -> services::Monitor {
+        services::Monitor {
+            name: "eDP-1".to_string(),
+            active_workspace_id: 1,
+            width: 1920,
+            height: 1080,
+            scale: 1.0,
+            ..Default::default()
+        }
+    }
+
+    fn placed(
+        window: services::Window,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> services::Window {
+        services::Window {
+            geometry: Some(services::WindowGeometry {
+                x,
+                y,
+                width,
+                height,
+            }),
+            ..window
+        }
+    }
+
+    const DOCK: Size<gpui::Pixels> = Size {
+        width: px(200.0),
+        height: px(61.0),
+    };
+
     #[test]
-    fn dodge_windows_falls_back_to_delayed_intelligent_hide_without_geometry_or_bounds() {
-        let other_monitor = window("focused", "HDMI-A-1");
-        let same_monitor = window("focused", "eDP-1");
-        let geometry = services::WindowGeometry {
-            x: 0,
-            y: 0,
-            width: 100,
-            height: 100,
+    fn dodge_windows_hides_for_any_window_covering_the_dock_on_the_current_workspace() {
+        let monitor = monitor();
+        let dodge = |windows: &[services::Window]| {
+            dodge_windows_hide_behavior(windows, Some(&monitor), BarPosition::Bottom, DOCK)
         };
-        let same_monitor_with_geometry = services::Window {
-            geometry: Some(geometry),
-            ..same_monitor.clone()
+        let tiled = placed(window("tiled", "eDP-1"), 0, 0, 1920, 1080);
+        let floating = placed(window("floating", "eDP-1"), 100, 100, 400, 300);
+
+        assert_eq!(dodge(&[]), DockHideBehavior::Visible);
+        assert_eq!(
+            dodge(std::slice::from_ref(&floating)),
+            DockHideBehavior::Visible
+        );
+        // Unfocused windows count too: the dock dodges what is on screen.
+        assert_eq!(
+            dodge(&[floating.clone(), tiled.clone()]),
+            DockHideBehavior::Immediate
+        );
+
+        let elsewhere = services::Window {
+            workspace_id: 2,
+            ..tiled.clone()
         };
+        let other_monitor = services::Window {
+            monitor: "HDMI-A-1".to_string(),
+            ..tiled.clone()
+        };
+        let minimized = services::Window {
+            is_minimized: true,
+            ..tiled.clone()
+        };
+        assert_eq!(
+            dodge(&[elsewhere, other_monitor, minimized]),
+            DockHideBehavior::Visible
+        );
+        assert_eq!(
+            dodge_windows_hide_behavior(&[tiled], None, BarPosition::Bottom, DOCK),
+            DockHideBehavior::Visible
+        );
+    }
+
+    #[test]
+    fn dodge_windows_treats_unplaced_windows_as_covering_the_dock() {
+        let monitor = monitor();
+        let niri_window = window("column", "eDP-1");
 
         assert_eq!(
-            dodge_windows_hide_behavior(Some(&other_monitor), Some("eDP-1"), None,),
-            DockHideBehavior::Delayed
+            dodge_windows_hide_behavior(
+                std::slice::from_ref(&niri_window),
+                Some(&monitor),
+                BarPosition::Bottom,
+                DOCK
+            ),
+            DockHideBehavior::Immediate
         );
+        let elsewhere = services::Window {
+            workspace_id: 2,
+            ..niri_window
+        };
         assert_eq!(
-            dodge_windows_hide_behavior(Some(&same_monitor), Some("eDP-1"), None,),
+            dodge_windows_hide_behavior(&[elsewhere], Some(&monitor), BarPosition::Bottom, DOCK),
             DockHideBehavior::Visible
         );
-        assert_eq!(
-            dodge_windows_hide_behavior(Some(&same_monitor_with_geometry), Some("eDP-1"), None,),
-            DockHideBehavior::Visible
-        );
+    }
+
+    #[test]
+    fn dock_bounds_follow_the_monitor_scale() {
+        let monitor = services::Monitor {
+            width: 3840,
+            height: 2160,
+            scale: 2.0,
+            ..monitor()
+        };
+
+        let dock_bounds = dock_bounds_in_compositor_space(BarPosition::Bottom, DOCK, &monitor);
+
+        // Logical 1920x1080: centered, 8px above the bottom edge.
+        assert_eq!(dock_bounds.origin, point(px(860.0), px(1011.0)));
     }
 
     #[test]
@@ -833,6 +912,7 @@ mod tests {
             y: 100,
             width: 2560,
             height: 1440,
+            scale: 1.0,
             ..Default::default()
         };
         let dock_bounds = dock_bounds_in_compositor_space(

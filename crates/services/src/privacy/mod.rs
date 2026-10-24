@@ -5,12 +5,13 @@
 
 use std::fs;
 use std::path::Path;
-use std::thread;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use futures_signals::signal::{Mutable, MutableSignalCloned};
 use futures_util::StreamExt;
 use inotify::{EventMask, Inotify, WatchMask};
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 
@@ -110,55 +111,68 @@ impl ManagedService for PrivacySubscriber {
     /// service's status, and stopping silences both.
     fn start(&self) {
         let token = self.lifecycle.begin();
-        self.data.lock_mut().webcam_access = is_device_in_use(WEBCAM_DEVICE_PATH);
-        start_pipewire_listener(self.data.clone(), token.clone());
-        start_webcam_watcher(self.data.clone(), token.clone());
-        token.active();
+        let data = self.data.clone();
+        token
+            .clone()
+            .supervise_blocking("PipeWire", move |token| run_pipewire_listener(&data, token));
+        let data = self.data.clone();
+        token.supervise("Webcam watcher", move |token| {
+            run_webcam_watcher(data.clone(), token)
+        });
     }
 }
 
-/// Start the PipeWire listener thread for media stream tracking.
-///
-/// The PipeWire loop is not async, so it keeps its own thread; a message on a
-/// loop-attached channel quits it when the run ends.
-fn start_pipewire_listener(data: Mutable<PrivacyData>, token: RunToken) {
-    let (quit_tx, quit_rx) = pipewire::channel::channel::<()>();
-    tokio::spawn({
-        let token = token.clone();
-        async move {
-            token.cancelled().await;
-            let _ = quit_tx.send(());
-        }
-    });
-
-    thread::spawn(move || {
-        if let Err(e) = run_pipewire_listener(data, token.clone(), quit_rx) {
-            error!("PipeWire listener error: {}", e);
-            token.error(e.to_string());
-        }
-    });
-}
-
-/// Run the PipeWire listener (blocking).
-fn run_pipewire_listener(
-    data: Mutable<PrivacyData>,
-    token: RunToken,
-    quit: pipewire::channel::Receiver<()>,
-) -> anyhow::Result<()> {
-    use pipewire::{context::ContextBox, main_loop::MainLoopRc};
+/// One PipeWire session (blocking). The loop is not async: a message on a
+/// loop-attached channel quits it when the run ends, and a core error (the
+/// daemon went away) quits it to fail the attempt.
+fn run_pipewire_listener(data: &Mutable<PrivacyData>, token: &RunToken) -> anyhow::Result<()> {
+    use pipewire::{context::ContextBox, core::PW_ID_CORE, main_loop::MainLoopRc};
 
     let mainloop = MainLoopRc::new(None)?;
-    let _quit = quit.attach(mainloop.loop_(), {
+    let (quit_tx, quit_rx) = pipewire::channel::channel::<()>();
+    let _quit = quit_rx.attach(mainloop.loop_(), {
         let mainloop = mainloop.clone();
         move |()| mainloop.quit()
     });
+    // Dropped when this attempt returns, which retires the canceller with it.
+    let (_attempt, attempt_done) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn({
+        let token = token.clone();
+        async move {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    let _ = quit_tx.send(());
+                }
+                _ = attempt_done => {}
+            }
+        }
+    });
+
     let context = ContextBox::new(mainloop.loop_(), None)?;
     let core = context.connect(None)?;
+    let failure = Rc::new(RefCell::new(None::<String>));
+    let _core_listener = core
+        .add_listener_local()
+        .error({
+            let failure = failure.clone();
+            let mainloop = mainloop.clone();
+            move |id, _seq, res, message| {
+                if id == PW_ID_CORE {
+                    *failure.borrow_mut() = Some(format!("{message} ({res})"));
+                    mainloop.quit();
+                }
+            }
+        })
+        .register();
     let registry = core.get_registry()?;
+
+    // The registry replays every live node on connect.
+    token.write(data, |data| data.nodes.clear());
 
     let data_add = data.clone();
     let data_remove = data.clone();
     let token_add = token.clone();
+    let token_remove = token.clone();
 
     let _listener = registry
         .add_listener_local()
@@ -183,7 +197,7 @@ fn run_pipewire_listener(
             }
         })
         .global_remove(move |id| {
-            if !token.alive() {
+            if !token_remove.alive() {
                 return;
             }
             let mut guard = data_remove.lock_mut();
@@ -196,24 +210,19 @@ fn run_pipewire_listener(
         })
         .register();
 
+    token.active();
     mainloop.run();
 
-    Ok(())
-}
-
-/// Start the webcam watcher task.
-fn start_webcam_watcher(data: Mutable<PrivacyData>, token: RunToken) {
-    tokio::spawn(async move {
-        if let Some(Err(e)) = token.run_until_cancelled(run_webcam_watcher(data)).await {
-            warn!("Webcam watcher error: {}", e);
-            token.error(e.to_string());
-        }
-    });
+    let failure = failure.borrow_mut().take();
+    anyhow::bail!(
+        "PipeWire connection lost: {}",
+        failure.as_deref().unwrap_or("loop ended")
+    )
 }
 
 /// Run the webcam watcher. The inotify fd sits on the tokio reactor, so a
 /// stop drops the watch at once instead of at the next device event.
-async fn run_webcam_watcher(data: Mutable<PrivacyData>) -> anyhow::Result<()> {
+async fn run_webcam_watcher(data: Mutable<PrivacyData>, token: RunToken) -> anyhow::Result<()> {
     // Check if webcam device exists
     if !Path::new(WEBCAM_DEVICE_PATH).exists() {
         warn!("Webcam device not found: {}", WEBCAM_DEVICE_PATH);
@@ -232,6 +241,10 @@ async fn run_webcam_watcher(data: Mutable<PrivacyData>) -> anyhow::Result<()> {
     )?;
 
     let mut events = inotify.into_event_stream([0; 1024])?;
+    // Watching first, so an open between the count and the watch is not lost.
+    let in_use = tokio::task::spawn_blocking(|| is_device_in_use(WEBCAM_DEVICE_PATH)).await?;
+    data.lock_mut().webcam_access = in_use;
+    token.active();
 
     while let Some(event) = events.next().await {
         let event = event?;
@@ -252,7 +265,7 @@ async fn run_webcam_watcher(data: Mutable<PrivacyData>) -> anyhow::Result<()> {
         }
     }
 
-    Ok(())
+    anyhow::bail!("webcam event stream ended")
 }
 
 /// Check how many processes have a device file open.

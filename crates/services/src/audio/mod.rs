@@ -10,7 +10,6 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::thread;
 
 use anyhow::{Context as _, anyhow, bail};
 use futures_signals::signal::{Mutable, MutableSignalCloned};
@@ -145,7 +144,7 @@ impl ManagedService for AudioSubscriber {
             }
         };
 
-        let jobs = self.jobs.attach({
+        let mut jobs = self.jobs.attach({
             let wake_tx = wake_tx.clone();
             move || wake(&wake_tx)
         });
@@ -159,11 +158,8 @@ impl ManagedService for AudioSubscriber {
         });
 
         let data = self.data.clone();
-        thread::spawn(move || {
-            if let Err(e) = run(&data, &token, jobs, wake_rx) {
-                error!("Audio listener error: {e:#}");
-                token.error(format!("{e:#}"));
-            }
+        token.supervise_blocking("Audio", move |token| {
+            run(&data, token, &mut jobs, wake_rx.try_clone()?)
         });
     }
 }
@@ -198,7 +194,7 @@ struct Local {
 fn run(
     data: &Mutable<AudioData>,
     token: &RunToken,
-    mut jobs: JobReceiver<AudioCommand>,
+    jobs: &mut JobReceiver<AudioCommand>,
     wake_rx: UnixStream,
 ) -> anyhow::Result<()> {
     let mut proplist = Proplist::new().context("creating PulseAudio proplist")?;
@@ -338,6 +334,12 @@ fn run(
         }
 
         iterate(&mut mainloop, !needs_refresh.get())?;
+        if matches!(
+            context.get_state(),
+            context::State::Failed | context::State::Terminated
+        ) {
+            bail!("PulseAudio connection lost");
+        }
     }
 
     Ok(())

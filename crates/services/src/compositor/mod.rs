@@ -57,16 +57,15 @@ impl CompositorSubscriber {
         };
 
         let data = Mutable::new(initial_state);
-
-        // Start the event listener (runs in a dedicated thread with sync handlers)
-        match backend {
-            CompositorBackend::Hyprland => hyprland::start_listener(data.clone()),
-            CompositorBackend::Niri => niri::start_listener(data.clone()),
-            CompositorBackend::Mango => mango::start_listener(data.clone()),
-        }
-
         let lifecycle = Lifecycle::new(ServiceMode::Eager);
         let token = lifecycle.begin();
+
+        // Blocking socket listeners, each on its own thread and retried on EOF.
+        match backend {
+            CompositorBackend::Hyprland => hyprland::start_listener(data.clone(), token.clone()),
+            CompositorBackend::Niri => niri::start_listener(data.clone(), token.clone()),
+            CompositorBackend::Mango => mango::start_listener(data.clone(), token.clone()),
+        }
 
         // Every backend's IPC is a blocking socket round trip (two on Mango
         // for a workspace switch), so commands run on the blocking pool,

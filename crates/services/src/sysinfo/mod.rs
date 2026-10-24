@@ -3,7 +3,6 @@
 //! This module provides a reactive subscriber for monitoring system resources
 //! using the sysinfo crate.
 
-use std::thread;
 use std::time::{Duration, Instant};
 
 use futures_signals::signal::{Mutable, MutableSignalCloned};
@@ -153,7 +152,10 @@ impl ManagedService for SysInfoSubscriber {
     }
 
     fn start(&self) {
-        start_listener(self.data.clone(), self.lifecycle.begin());
+        let data = self.data.clone();
+        self.lifecycle
+            .begin()
+            .supervise_blocking("Sysinfo", move |token| poll(&data, token));
     }
 }
 
@@ -169,42 +171,42 @@ fn format_speed(kb_per_sec: u32) -> String {
     }
 }
 
-/// Start the polling listener thread.
-fn start_listener(data: Mutable<SysInfoData>, token: RunToken) {
-    thread::spawn(move || {
-        let mut system = System::new();
-        let mut components = Components::new_with_refreshed_list();
-        let mut disks = Disks::new_with_refreshed_list();
-        let mut networks = Networks::new_with_refreshed_list();
-        let mut last_check: Option<Instant> = None;
-        let mut last_received: u64 = 0;
-        let mut last_transmitted: u64 = 0;
-        token.active();
+/// Poll until the run ends. Reads cannot fail, so this never retries.
+fn poll(data: &Mutable<SysInfoData>, token: &RunToken) -> anyhow::Result<()> {
+    let mut system = System::new();
+    let mut components = Components::new_with_refreshed_list();
+    let mut disks = Disks::new_with_refreshed_list();
+    let mut networks = Networks::new_with_refreshed_list();
+    let mut last_check: Option<Instant> = None;
+    let mut last_received: u64 = 0;
+    let mut last_transmitted: u64 = 0;
+    token.active();
 
-        while token.alive() {
-            let new_data = fetch_system_info(
-                &mut system,
-                &mut components,
-                &mut disks,
-                &mut networks,
-                &mut last_check,
-                &mut last_received,
-                &mut last_transmitted,
+    loop {
+        let new_data = fetch_system_info(
+            &mut system,
+            &mut components,
+            &mut disks,
+            &mut networks,
+            &mut last_check,
+            &mut last_received,
+            &mut last_transmitted,
+        );
+
+        // Only update if changed. Through the token: a stop can land during
+        // the sleep, and this thread must not publish after it.
+        if *data.lock_ref() != new_data {
+            debug!(
+                "SysInfo updated: CPU {}%, MEM {}%, TEMP {:?}°C",
+                new_data.cpu_usage, new_data.memory_usage, new_data.temperature
             );
-
-            // Only update if changed. Through the token: a stop can land during
-            // the sleep, and this thread must not publish after it.
-            if *data.lock_ref() != new_data {
-                debug!(
-                    "SysInfo updated: CPU {}%, MEM {}%, TEMP {:?}°C",
-                    new_data.cpu_usage, new_data.memory_usage, new_data.temperature
-                );
-                token.write(&data, |data| *data = new_data);
-            }
-
-            thread::sleep(POLL_INTERVAL);
+            token.write(data, |data| *data = new_data);
         }
-    });
+
+        if !token.sleep_blocking(POLL_INTERVAL) {
+            return Ok(());
+        }
+    }
 }
 
 /// Fetch current system information.

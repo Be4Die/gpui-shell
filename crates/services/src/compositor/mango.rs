@@ -15,13 +15,14 @@ use std::{
     env,
     io::{BufRead, BufReader, Write as _},
     os::unix::net::UnixStream,
-    thread,
 };
 
 use anyhow::{Context, Result, anyhow};
 use futures_signals::signal::Mutable;
 use serde_json::Value;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
+
+use crate::lifecycle::RunToken;
 
 use super::types::{ActiveWindow, CompositorCommand, CompositorState, Monitor, Workspace};
 
@@ -280,8 +281,8 @@ pub fn fetch_full_state() -> Result<CompositorState> {
 ///
 /// Mango's `watch` protocol only streams one kind of update per connection,
 /// so we open one persistent connection per state category we care about.
-pub fn start_listener(data: Mutable<CompositorState>) {
-    spawn_watch_thread(data.clone(), "watch all-monitors", |data, json| {
+pub fn start_listener(data: Mutable<CompositorState>, token: RunToken) {
+    spawn_watch_thread(data.clone(), &token, "watch all-monitors", |data, json| {
         if let Some(monitors) = json["monitors"].as_array() {
             let (workspaces, monitors, active_workspace_id) = build_monitors(monitors);
             let mut state = data.lock_mut();
@@ -291,7 +292,7 @@ pub fn start_listener(data: Mutable<CompositorState>) {
         }
     });
 
-    spawn_watch_thread(data.clone(), "watch focusing-client", |data, json| {
+    spawn_watch_thread(data.clone(), &token, "watch focusing-client", |data, json| {
         let mut state = data.lock_mut();
         state.active_window = map_active_window(&json);
         // `watch all-clients` may not itself re-emit purely on a focus
@@ -303,21 +304,21 @@ pub fn start_listener(data: Mutable<CompositorState>) {
         }
     });
 
-    spawn_watch_thread(data.clone(), "watch keymode", |data, json| {
+    spawn_watch_thread(data.clone(), &token, "watch keymode", |data, json| {
         if let Some(keymode) = json["keymode"].as_str() {
             let mut state = data.lock_mut();
             state.submap = keymode_to_submap(keymode);
         }
     });
 
-    spawn_watch_thread(data.clone(), "watch keyboardlayout", |data, json| {
+    spawn_watch_thread(data.clone(), &token, "watch keyboardlayout", |data, json| {
         if let Some(layout) = json["layout"].as_str() {
             let mut state = data.lock_mut();
             state.keyboard_layout = layout.to_string();
         }
     });
 
-    spawn_watch_thread(data.clone(), "watch all-clients", |data, json| {
+    spawn_watch_thread(data.clone(), &token, "watch all-clients", |data, json| {
         if let Some(clients) = json["clients"].as_array() {
             let mut state = data.lock_mut();
             let monitors = state.monitors.clone();
@@ -328,20 +329,21 @@ pub fn start_listener(data: Mutable<CompositorState>) {
 
 fn spawn_watch_thread(
     data: Mutable<CompositorState>,
+    token: &RunToken,
     cmd: &'static str,
     handler: impl Fn(&Mutable<CompositorState>, Value) + Send + 'static,
 ) {
-    thread::spawn(move || {
-        if let Err(e) = run_watch(cmd, &data, &handler) {
-            error!("Mango '{}' listener error: {}", cmd, e);
-        }
-    });
+    token
+        .clone()
+        .supervise_blocking("Mango", move |token| run_watch(cmd, &data, token, &handler));
 }
 
-/// Run a single blocking watch connection, invoking `handler` for each JSON update.
+/// Run a single blocking watch connection, invoking `handler` for each JSON
+/// update. Fails on EOF so the supervisor reconnects.
 fn run_watch(
     cmd: &str,
     data: &Mutable<CompositorState>,
+    token: &RunToken,
     handler: &impl Fn(&Mutable<CompositorState>, Value),
 ) -> Result<()> {
     info!("Starting Mango listener: {}", cmd);
@@ -350,6 +352,7 @@ fn run_watch(
     stream.write_all(cmd.as_bytes())?;
     stream.write_all(b"\n")?;
     stream.flush()?;
+    token.active();
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -357,7 +360,7 @@ fn run_watch(
         line.clear();
         let bytes_read = reader.read_line(&mut line)?;
         if bytes_read == 0 {
-            break; // EOF — mango disconnected
+            anyhow::bail!("Mango '{cmd}' stream closed");
         }
 
         match serde_json::from_str::<Value>(&line) {
@@ -365,7 +368,4 @@ fn run_watch(
             Err(e) => debug!("Failed to parse Mango event for '{}': {:?}", cmd, e),
         }
     }
-
-    info!("Mango watch stream ended: {}", cmd);
-    Ok(())
 }

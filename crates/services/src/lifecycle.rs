@@ -14,9 +14,9 @@
 //! generation moves on.
 //!
 //! A listener does not retry on its own. It returns `Err` and
-//! [`RunToken::supervise`] runs it again after a [`Backoff`] delay, so every
-//! service recovers from a bus hiccup the same way and shows the same status
-//! while it waits.
+//! [`RunToken::supervise`] (or `supervise_blocking` for a listener that owns a
+//! thread) runs it again after a [`Backoff`] delay, so every service recovers
+//! from a bus hiccup the same way and shows the same status while it waits.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use futures_signals::signal::{Mutable, MutableSignalCloned};
 use serde::{Deserialize, Serialize};
+use tokio::runtime::Handle;
 use tokio::sync::watch;
 
 use crate::ServiceStatus;
@@ -212,6 +213,36 @@ where
     }
 }
 
+/// [`supervise`] for a listener that blocks its thread (PulseAudio, PipeWire,
+/// compositor sockets). Attempts run on this thread, which has entered the
+/// shared runtime so they can reach it, and must return once the token is
+/// cancelled.
+fn supervise_blocking<F>(token: RunToken, name: &'static str, runtime: Handle, mut attempt: F)
+where
+    F: FnMut(&RunToken) -> anyhow::Result<()>,
+{
+    let _runtime = runtime.enter();
+    let mut backoff = Backoff::new();
+    loop {
+        let started = std::time::Instant::now();
+        let result = attempt(&token);
+        if !token.alive() {
+            return;
+        }
+        let Err(err) = result else {
+            return;
+        };
+
+        let delay = backoff.delay(started.elapsed());
+        tracing::warn!("{name} failed, retrying in {delay:?}: {err:#}");
+        token.error(err.to_string());
+        if !token.sleep_blocking(delay) {
+            return;
+        }
+        token.set(ServiceStatus::Initializing);
+    }
+}
+
 /// Handle held by a running listener.
 ///
 /// Writes through a stale token are dropped, so a listener that only notices
@@ -262,6 +293,31 @@ impl RunToken {
         Fut: Future<Output = anyhow::Result<()>> + Send + 'static,
     {
         tokio::spawn(supervise(self, name, attempt));
+    }
+
+    /// [`Self::supervise`] for a blocking listener, on a dedicated thread.
+    /// See [`supervise_blocking`]. Call from within the tokio runtime.
+    pub fn supervise_blocking<F>(self, name: &'static str, attempt: F)
+    where
+        F: FnMut(&RunToken) -> anyhow::Result<()> + Send + 'static,
+    {
+        let runtime = Handle::current();
+        let token = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name(name.to_lowercase())
+            .spawn(move || supervise_blocking(self, name, runtime, attempt));
+        if let Err(err) = spawned {
+            token.error(format!("spawning the {name} thread: {err}"));
+        }
+    }
+
+    /// Sleep on a blocking listener's thread, waking early on a stop or
+    /// restart. False once cancelled. Only on [`Self::supervise_blocking`]
+    /// threads, which have entered the runtime.
+    pub fn sleep_blocking(&self, duration: Duration) -> bool {
+        Handle::current()
+            .block_on(self.run_until_cancelled(tokio::time::sleep(duration)))
+            .is_some()
     }
 
     /// Mutate `data` only while this run is current.
@@ -486,6 +542,55 @@ mod tests {
         .await;
 
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(lifecycle.status(), ServiceStatus::Stopped);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failing_blocking_listener_is_retried() {
+        let lifecycle = Lifecycle::new(ServiceMode::Eager);
+        let token = lifecycle.begin();
+        let runtime = Handle::current();
+        let mut attempts = 0;
+
+        let thread = std::thread::spawn(move || {
+            supervise_blocking(token, "test", runtime, |token| {
+                attempts += 1;
+                if attempts == 1 {
+                    anyhow::bail!("down");
+                }
+                token.active();
+                Ok(())
+            });
+            attempts
+        });
+
+        let attempts = tokio::task::spawn_blocking(move || thread.join().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(lifecycle.status(), ServiceStatus::Active);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stop_cuts_a_blocking_backoff_short() {
+        let lifecycle = Lifecycle::new(ServiceMode::Eager);
+        let token = lifecycle.begin();
+        let runtime = Handle::current();
+        let started = std::time::Instant::now();
+
+        let thread = std::thread::spawn(move || {
+            supervise_blocking(token, "test", runtime, |_token| anyhow::bail!("down"));
+        });
+
+        // Wait until the first attempt failed and the backoff began.
+        while !matches!(lifecycle.status(), ServiceStatus::Error(_)) {
+            tokio::task::yield_now().await;
+        }
+        lifecycle.stop();
+        tokio::task::spawn_blocking(move || thread.join().unwrap())
+            .await
+            .unwrap();
+        assert!(started.elapsed() < Backoff::BASE);
         assert_eq!(lifecycle.status(), ServiceStatus::Stopped);
     }
 }

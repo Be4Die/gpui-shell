@@ -38,13 +38,20 @@ pub(super) fn geometry_overlaps_dock(
         && window_bottom > dock_top
 }
 
+/// Where the dock sits, in the logical layout space window geometry uses.
+/// Monitors report physical pixels, so their size is scaled down.
 pub(super) fn dock_bounds_in_compositor_space(
     position: crate::bar::config::BarPosition,
     dock_size: Size<gpui::Pixels>,
     monitor: &services::Monitor,
 ) -> Bounds<gpui::Pixels> {
-    let monitor_width = monitor.width as f32;
-    let monitor_height = monitor.height as f32;
+    let scale = if monitor.scale > 0.0 {
+        monitor.scale
+    } else {
+        1.0
+    };
+    let monitor_width = monitor.width as f32 / scale;
+    let monitor_height = monitor.height as f32 / scale;
     let dock_width: f32 = dock_size.width.into();
     let dock_height: f32 = dock_size.height.into();
     let (x, y) = match position {
@@ -127,28 +134,33 @@ pub(super) fn initial_hide_action(
     }
 }
 
+/// Hide while any window on `monitor`'s current workspace covers the dock.
+/// A window the compositor cannot place (Niri) counts as covering it: its
+/// column spans the full height, so it reaches the dock's edge.
 pub(super) fn dodge_windows_hide_behavior(
-    focused_window: Option<&services::Window>,
-    monitor_name: Option<&str>,
-    dock_bounds: Option<Bounds<gpui::Pixels>>,
+    windows: &[services::Window],
+    monitor: Option<&services::Monitor>,
+    position: crate::bar::config::BarPosition,
+    dock_size: Size<gpui::Pixels>,
 ) -> DockHideBehavior {
-    let intelligent_hide = focused_window_is_on_other_monitor(focused_window, monitor_name);
-    let Some(geometry) = focused_window.and_then(|window| window.geometry) else {
-        return if intelligent_hide {
-            DockHideBehavior::Delayed
-        } else {
-            DockHideBehavior::Visible
-        };
+    let Some(monitor) = monitor else {
+        return DockHideBehavior::Visible;
     };
-    let Some(dock_bounds) = dock_bounds else {
-        return if intelligent_hide {
-            DockHideBehavior::Delayed
-        } else {
-            DockHideBehavior::Visible
-        };
-    };
+    let dock_bounds = dock_bounds_in_compositor_space(position, dock_size, monitor);
+    let covered = windows
+        .iter()
+        .filter(|window| {
+            window.monitor == monitor.name
+                && window.workspace_id == monitor.active_workspace_id
+                && !window.is_minimized
+        })
+        .any(|window| {
+            window
+                .geometry
+                .is_none_or(|geometry| geometry_overlaps_dock(geometry, dock_bounds))
+        });
 
-    if geometry_overlaps_dock(geometry, dock_bounds) {
+    if covered {
         DockHideBehavior::Immediate
     } else {
         DockHideBehavior::Visible
