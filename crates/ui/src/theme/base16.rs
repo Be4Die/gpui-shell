@@ -252,7 +252,10 @@ impl Base16Palette {
             ])
             .stdin(Stdio::null())
             .output()
-            .map_err(|e| anyhow::anyhow!("Failed to run matugen: {e}"))?;
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => anyhow::anyhow!("matugen is not installed"),
+                _ => anyhow::anyhow!("Failed to run matugen: {e}"),
+            })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

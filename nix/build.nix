@@ -118,6 +118,13 @@ let
 
       doCheck = false;
 
+      # Wallpaper theming shells out to matugen; the installed shell runs
+      # outside the dev shell, so put it on PATH.
+      postInstall = ''
+        wrapProgram $out/bin/${pname} \
+          --prefix PATH : ${lib.makeBinPath [ matugen ]}
+      '';
+
       cargoVendorDir = craneLib.vendorCargoDeps {
         inherit src cargoLock;
 
