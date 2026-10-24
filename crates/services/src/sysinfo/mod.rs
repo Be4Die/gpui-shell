@@ -157,6 +157,9 @@ impl ManagedService for SysInfoSubscriber {
     }
 }
 
+/// Bar readings don't need to be fresher than this, and each poll walks /proc.
+const POLL_INTERVAL: Duration = Duration::from_secs(5);
+
 /// Format speed in KB/s or MB/s.
 fn format_speed(kb_per_sec: u32) -> String {
     if kb_per_sec >= 1000 {
@@ -199,7 +202,7 @@ fn start_listener(data: Mutable<SysInfoData>, token: RunToken) {
                 token.write(&data, |data| *data = new_data);
             }
 
-            thread::sleep(Duration::from_secs(2));
+            thread::sleep(POLL_INTERVAL);
         }
     });
 }
