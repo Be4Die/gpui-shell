@@ -3,10 +3,10 @@
 mod config;
 pub use config::TrayConfig;
 
-use crate::panel::{PanelConfig, panel_placement_from_event, toggle_panel};
+use crate::windows::{PanelConfig, PanelSize, ShellWindows, panel_placement_from_event};
 use gpui::{
     AnyElement, App, ClickEvent, Context, ElementId, Pixels, Point, Render, RenderImage,
-    SharedString, Size, Window, div, img, prelude::*, px,
+    SharedString, Window, div, img, prelude::*, px,
 };
 use image::{Frame, RgbaImage};
 use services::{MenuLayout, MenuLayoutProps, TrayCommand, TrayData, TrayIcon, TrayItem};
@@ -142,19 +142,23 @@ impl Tray {
             let subscriber = self.subscriber.clone();
             let item_name = item.name.clone();
             let config = Config::global(cx);
-            let panel_size = Size::new(px(250.0), px(400.0));
+            // Menus run from one entry to dozens: the window hugs the menu
+            // and only scrolls past the cap.
+            let size = PanelSize::FitHeight {
+                width: 260.0,
+                max_height: 520.0,
+            };
             let (anchor, margin) =
-                panel_placement_from_event(config.bar.position, at, window, cx, panel_size);
+                panel_placement_from_event(config.bar.position, at, window, cx, size.initial());
 
             let config = PanelConfig {
-                width: 250.0,
-                height: 400.0,
+                size,
                 anchor,
                 margin,
                 namespace: "systray-menu".to_string(),
             };
 
-            toggle_panel(&panel_id, config, cx, move |cx| {
+            ShellWindows::toggle_panel(cx, &panel_id, config, move |cx| {
                 TrayMenuPanel::new(menu, item_name, subscriber, cx)
             });
         } else {

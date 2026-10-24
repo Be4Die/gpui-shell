@@ -349,17 +349,20 @@ impl Render for MprisPanel {
                     )
                     .when(is_empty, |el| {
                         el.child(
-                            h_flex().flex_1().justify_center().child(
-                                Label::new("No MPRIS players detected")
-                                    .size(TextSize::Small)
-                                    .color(Color::Muted),
-                            ),
+                            h_flex()
+                                .py(Spacing::XLarge.pixels())
+                                .justify_center()
+                                .child(
+                                    Label::new("No MPRIS players detected")
+                                        .size(TextSize::Small)
+                                        .color(Color::Muted),
+                                ),
                         )
                     })
                     .when(!is_empty, |el| {
                         el.child(
                             v_flex()
-                                .flex_1()
+                                .flex_grow_1()
                                 .overflow_hidden()
                                 .gap(Spacing::Medium.pixels())
                                 .children(players.into_iter().map(|player| {

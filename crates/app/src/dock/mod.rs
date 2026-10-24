@@ -490,6 +490,18 @@ impl Dock {
     ) -> DockHideBehavior {
         let monitor_name = self.current_monitor_name(window, cx);
         let focused_window = self.focused_window();
+
+        // A panel or the launcher took the keyboard, so the compositor reports
+        // no focused toplevel. The windows underneath did not move: keep the
+        // decision made before our window opened instead of revealing.
+        if focused_window.is_none() && crate::windows::ShellWindows::holds_keyboard_focus(cx) {
+            return if self.hidden_by_rule {
+                DockHideBehavior::Immediate
+            } else {
+                DockHideBehavior::Visible
+            };
+        }
+
         let intelligent_hide =
             || focused_window_is_on_other_monitor(focused_window, monitor_name.as_deref());
 
@@ -704,9 +716,11 @@ impl Dock {
                         window.viewport_size(),
                         panel_size,
                     );
-                    let panel_config = crate::panel::PanelConfig {
-                        width: DOCK_CONTEXT_MENU_WIDTH,
-                        height: panel_height,
+                    let panel_config = crate::windows::PanelConfig {
+                        size: crate::windows::PanelSize::Fixed {
+                            width: DOCK_CONTEXT_MENU_WIDTH,
+                            height: panel_height,
+                        },
                         anchor: placement.anchor,
                         margin: placement.margin,
                         namespace: "dock-context-menu".to_string(),
@@ -718,11 +732,11 @@ impl Dock {
                     let exec = item.exec.clone();
                     let app_name = item.name.clone();
                     let icon_path = item.icon_path.clone();
-                    crate::panel::toggle_panel_on_display(
+                    crate::windows::ShellWindows::toggle_panel_on_display(
+                        cx,
                         &panel_id,
                         panel_config,
                         display_id_for_window(window),
-                        cx,
                         move |cx| {
                             context_menu::DockContextMenu::new(
                                 menu_panel_id,
@@ -856,18 +870,20 @@ impl Render for Dock {
                                 window.viewport_size(),
                                 panel_size,
                             );
-                            let panel_config = crate::panel::PanelConfig {
-                                width: DOCK_APP_PICKER_WIDTH,
-                                height: picker::DOCK_APP_PICKER_HEIGHT,
+                            let panel_config = crate::windows::PanelConfig {
+                                size: crate::windows::PanelSize::Fixed {
+                                    width: DOCK_APP_PICKER_WIDTH,
+                                    height: picker::DOCK_APP_PICKER_HEIGHT,
+                                },
                                 anchor: placement.anchor,
                                 margin: placement.margin,
                                 namespace: "dock-app-picker".to_string(),
                             };
-                            crate::panel::toggle_panel_on_display(
+                            crate::windows::ShellWindows::toggle_panel_on_display(
+                                cx,
                                 "dock-app-picker",
                                 panel_config,
                                 display_id_for_window(window),
-                                cx,
                                 picker::DockAppPicker::new,
                             );
                         }),

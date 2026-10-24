@@ -657,6 +657,7 @@ pub fn toggle(input: Option<String>, cx: &mut App) {
             },
         ) {
             *guard = Some(handle);
+            crate::windows::ShellWindows::set_launcher(cx, Some(handle.into()));
             tracing::debug!("launcher::toggle: window opened {:?}", start.elapsed());
         }
     }

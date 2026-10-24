@@ -54,7 +54,13 @@ impl Render for NotificationCenter {
                         .bg(theme.colors.background)
                         .border_1()
                         .border_color(theme.colors.border)
-                        .child(notification_card_body(&item, cx, true, &self.subscriber))
+                        .child(notification_card_body(
+                            &item,
+                            cx,
+                            true,
+                            false,
+                            &self.subscriber,
+                        ))
                         .child(
                             div()
                                 .absolute()
@@ -148,9 +154,12 @@ impl Render for NotificationCenter {
                     ),
             )
             .child(
+                // Grows from its content (so the panel can size itself to
+                // the list) and shrinks to scroll once the panel hits its cap.
                 div()
                     .id("notification-center-list")
-                    .flex_1()
+                    .flex_grow_1()
+                    .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
                     .flex()

@@ -24,10 +24,7 @@ mod wifi;
 pub use config::{ControlCenterConfig, PowerActionsConfig};
 
 use crate::icons;
-use gpui::{
-    App, AvailableSpace, Context, FocusHandle, Focusable, MouseButton, Size, Window, div,
-    prelude::*, px,
-};
+use gpui::{App, Context, FocusHandle, Focusable, MouseButton, Window, div, prelude::*, px};
 use services::{NetworkCommand, UPowerCommand};
 use std::rc::Rc;
 use ui::patterns::PanelSurface;
@@ -43,7 +40,9 @@ pub use quick_toggles::ExpandedSection;
 pub use wifi::WifiPasswordState;
 
 pub const CONTROL_CENTER_PANEL_WIDTH: f32 = 340.0;
-pub const CONTROL_CENTER_PANEL_HEIGHT_COLLAPSED: f32 = 288.0;
+/// The panel follows its content; this only caps an expanded section, and the
+/// window host clamps it to the output anyway.
+pub const CONTROL_CENTER_PANEL_MAX_HEIGHT: f32 = 900.0;
 
 type ToggleSectionCallback = Rc<dyn Fn(ExpandedSection, &mut App)>;
 type WifiConnectCallback = Rc<dyn Fn(String, Option<String>, &mut App)>;
@@ -133,7 +132,7 @@ impl Focusable for ControlCenter {
 }
 
 impl Render for ControlCenter {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let network_service = AppState::network(cx).clone();
 
         // Create entity-based callbacks for section toggling
@@ -214,21 +213,6 @@ impl Render for ControlCenter {
                 });
             }
         });
-
-        let mut desired_width = CONTROL_CENTER_PANEL_WIDTH;
-        let mut max_height = None;
-
-        if let Some(display) = window.display(cx) {
-            let bounds = display.visible_bounds();
-            let visible_width: f32 = bounds.size.width.into();
-            let visible_height: f32 = bounds.size.height.into();
-            let gutter = Spacing::Medium.value() * 2.0;
-            let max_width = (visible_width - gutter).max(240.0);
-            let max_height_value = (visible_height - gutter).max(240.0);
-
-            desired_width = desired_width.min(max_width);
-            max_height = Some(max_height_value);
-        }
 
         let build_root = |cx: &mut Context<Self>| {
             let theme = cx.theme();
@@ -687,28 +671,7 @@ impl Render for ControlCenter {
                 })
         };
 
-        // Measure content to size the panel to its actual height (clamped to display).
-        let content_height = {
-            let mut measure_root = build_root(cx).into_any_element();
-            let available_space = Size {
-                width: AvailableSpace::Definite(px(desired_width)),
-                height: AvailableSpace::MaxContent,
-            };
-            measure_root
-                .layout_as_root(available_space, window, cx)
-                .height
-        };
-
-        let mut desired_height = content_height;
-        if let Some(max_height_value) = max_height {
-            desired_height = desired_height.min(px(max_height_value));
-        }
-
-        let desired_size = Size::new(px(desired_width), desired_height);
-        if window.viewport_size() != desired_size {
-            window.resize(desired_size);
-        }
-
+        // The panel window sizes itself to this content (`windows::PanelHost`).
         build_root(cx)
     }
 }

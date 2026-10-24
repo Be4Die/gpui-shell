@@ -79,9 +79,9 @@ impl Render for DockContextMenu {
             let panel_id = self.panel_id.clone();
             self.focus_out_subscription =
                 Some(
-                    cx.on_focus_out(&self.focus_handle, window, move |_, _, window, _| {
+                    cx.on_focus_out(&self.focus_handle, window, move |_, _, window, cx| {
                         window.remove_window();
-                        crate::panel::forget_panel(&panel_id);
+                        crate::windows::ShellWindows::forget_panel(cx, &panel_id);
                     }),
                 );
         }
@@ -105,7 +105,7 @@ impl Render for DockContextMenu {
                 pin_label,
                 move |this, _window, cx| {
                     toggle_pin(&this.item_key, cx);
-                    crate::panel::close_panel(cx);
+                    crate::windows::ShellWindows::close_panel(cx);
                 },
                 cx,
             )
@@ -127,7 +127,7 @@ impl Render for DockContextMenu {
                             startup_wm_class: None,
                         };
                         app.launch();
-                        crate::panel::close_panel(cx);
+                        crate::windows::ShellWindows::close_panel(cx);
                     },
                     cx,
                 )

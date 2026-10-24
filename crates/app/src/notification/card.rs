@@ -3,10 +3,14 @@ use gpui::{Context, MouseButton, div, img, px};
 use services::{Notification, NotificationCommand, NotificationSubscriber};
 use ui::{ActiveTheme, Radius, Spacing, TextSize};
 
+/// The body of one notification. `compact` keeps it to the app, the summary
+/// and one line of body with no actions - the shape of a popup at rest, before
+/// the pointer expands it.
 pub(super) fn notification_card_body<V>(
     notification: &Notification,
     cx: &Context<V>,
     show_image: bool,
+    compact: bool,
     subscriber: &NotificationSubscriber,
 ) -> gpui::AnyElement {
     let theme = cx.theme();
@@ -165,10 +169,11 @@ pub(super) fn notification_card_body<V>(
                             .text_size(TextSize::XSmall.rems())
                             .text_color(theme.colors.text_muted)
                             .line_height(px(16.0))
+                            .when(compact, |el| el.line_clamp(1))
                             .child(body),
                     )
                 })
-                .when(!actions.is_empty(), |el| {
+                .when(!actions.is_empty() && !compact, |el| {
                     el.child(
                         div()
                             .mt(px(4.0))

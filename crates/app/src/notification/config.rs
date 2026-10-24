@@ -24,6 +24,8 @@ pub struct NotificationConfig {
     pub center_height: f32,
     pub popup_position: NotificationPopupPosition,
     pub popup_width: f32,
+    /// The most height the popup stack may take. The stack is as tall as the
+    /// notifications in it and only clips past this.
     pub popup_height: f32,
     pub popup_margin_top: f32,
     pub popup_margin_right: f32,

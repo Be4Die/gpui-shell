@@ -1,25 +1,43 @@
+//! The notification popups: one layer-shell window per output, holding the
+//! notifications that have not expired or been dismissed.
+//!
+//! At rest the window shows a pile - the newest notification, compact, with
+//! the edges of up to two more peeking out beneath it. Pointer over the pile
+//! and it fans out: every notification, with its full body and actions, and
+//! no expiry while the pointer stays. The window is only ever as big as what
+//! it shows, and only the cards take input, so the desktop beneath an empty
+//! corner of it keeps getting the clicks.
+
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 use futures_signals::signal::SignalExt;
 use futures_util::StreamExt;
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, DisplayId, Entity, MouseButton, Point, Render, Size,
-    Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div,
-    layer_shell::*, prelude::*, px,
+    AnyElement, AnyWindowHandle, App, Bounds, Context, DisplayId, Entity, MouseButton, Point,
+    Render, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div,
+    layer_shell::*, point, prelude::*, px, size,
 };
 use services::{Notification, NotificationCommand, NotificationSubscriber};
 use ui::patterns::PanelSurface;
-use ui::{ActiveTheme, Color, Icon, IconSize, Spacing};
+use ui::{ActiveTheme, Color, Icon, IconSize, Radius, Spacing};
 
 use crate::config::ActiveConfig;
 use crate::state::AppState;
+use crate::windows::WindowFit;
 
 use super::card::notification_card_body;
 use super::config::{NotificationConfig, NotificationPopupPosition};
 
 static POPUP_STATE: LazyLock<Mutex<HashMap<Option<DisplayId>, PopupWindowState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// How many notifications peek out from under the top one at rest.
+const PEEK_COUNT: usize = 2;
+/// Height of one peeking edge.
+const PEEK_HEIGHT: f32 = 6.0;
+/// How much narrower each peeking edge is than the card above it, per side.
+const PEEK_INSET: f32 = 10.0;
 
 struct PopupWindowState {
     handle: AnyWindowHandle,
@@ -29,6 +47,11 @@ struct PopupWindowState {
 struct NotificationPopupStack {
     subscriber: NotificationSubscriber,
     notifications: Vec<Notification>,
+    /// The pointer is over the stack: it is fanned out and held open.
+    hovered: bool,
+    fit: WindowFit,
+    /// The window size the input region was last cut for.
+    input_region_for: Option<Size<gpui::Pixels>>,
 }
 
 impl NotificationPopupStack {
@@ -36,66 +59,159 @@ impl NotificationPopupStack {
         Self {
             subscriber,
             notifications,
+            hovered: false,
+            fit: WindowFit::default(),
+            input_region_for: None,
         }
+    }
+
+    fn set_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        if self.hovered == hovered {
+            return;
+        }
+        self.hovered = hovered;
+        self.subscriber
+            .dispatch(NotificationCommand::HoldPopups(hovered));
+        cx.notify();
+    }
+
+    /// One notification card. Compact at rest, full when fanned out.
+    fn render_card(
+        &self,
+        notification: &Notification,
+        compact: bool,
+        config: &NotificationConfig,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let dismiss_subscriber = self.subscriber.clone();
+        let id = notification.id;
+
+        div()
+            .relative()
+            .w_full()
+            .overflow_hidden()
+            .panel_surface(cx)
+            .p(Spacing::Medium.pixels())
+            .when(!compact, |el| el.border_color(theme.colors.accent))
+            .child(notification_card_body(
+                notification,
+                cx,
+                false,
+                compact,
+                &self.subscriber,
+            ))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(8.0))
+                    .right(px(8.0))
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_, _, _, _cx| {
+                            dismiss_subscriber.dispatch(NotificationCommand::Dismiss(id));
+                        }),
+                    )
+                    .child(
+                        Icon::new(config.icons.close())
+                            .size(IconSize::XSmall)
+                            .color(Color::Muted),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// The edges of the notifications under the top card, at rest.
+    fn render_peek(&self, depth: usize, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let inset = PEEK_INSET * (depth + 1) as f32;
+        div()
+            .h(px(PEEK_HEIGHT))
+            .mx(px(inset))
+            .bg(theme.colors.surface_background)
+            .border_1()
+            .border_t_0()
+            .border_color(theme.colors.border)
+            .rounded_b(Radius::Large.pixels())
+            .into_any_element()
+    }
+
+    fn build_stack(&self, config: &NotificationConfig, cx: &mut Context<Self>) -> AnyElement {
+        let fanned = self.hovered;
+        let shown = if fanned {
+            self.notifications.len()
+        } else {
+            self.notifications.len().min(1)
+        };
+        let peeks = if fanned {
+            0
+        } else {
+            self.notifications.len().saturating_sub(1).min(PEEK_COUNT)
+        };
+        let cards: Vec<AnyElement> = self.notifications[..shown]
+            .iter()
+            .map(|notification| self.render_card(notification, !fanned, config, cx))
+            .collect();
+
+        div()
+            .id("notification-popup-stack")
+            .w_full()
+            .p(Spacing::Medium.pixels())
+            .flex()
+            .flex_col()
+            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                this.set_hovered(*hovered, cx);
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XSmall.pixels())
+                    .children(cards),
+            )
+            .children((0..peeks).map(|depth| self.render_peek(depth, cx)))
+            .into_any_element()
     }
 }
 
 impl Render for NotificationPopupStack {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
         window.set_rem_size(cx.theme().font_size);
-        let theme = cx.theme();
-        let config = &cx.config().notification;
-        let items = self.notifications.clone();
+        let config = cx.config().notification.clone();
+        let margin = popup_margin(&config);
+
+        let measure = self.build_stack(&config, cx);
+        let paint = self.fit.fit_height(
+            window,
+            cx,
+            measure,
+            px(config.popup_width),
+            px(config.popup_height),
+            px(margin.0 + margin.2),
+        );
+
+        // Only the cards take the pointer; the padding around them, and the
+        // window while it is still blank, pass clicks through to the desktop.
+        if let Some(window_size) = self.fit.requested()
+            && self.input_region_for != Some(window_size)
+        {
+            let pad = Spacing::Medium.pixels();
+            let region = Bounds {
+                origin: point(pad, pad),
+                size: size(
+                    (window_size.width - pad * 2.).max(px(0.)),
+                    (window_size.height - pad * 2.).max(px(0.)),
+                ),
+            };
+            window.set_input_region(Some(&[region]));
+            self.input_region_for = Some(window_size);
+        }
 
         div()
-            .id("notification-popup-stack")
+            .id("notification-popup-window")
             .size_full()
-            .p(Spacing::Medium.pixels())
-            .child(
-                div()
-                    .size_full()
-                    .flex()
-                    .flex_col()
-                    .gap(Spacing::XSmall.pixels())
-                    .children(items.into_iter().map(|notification| {
-                        let dismiss_subscriber = self.subscriber.clone();
-                        let id = notification.id;
-
-                        div()
-                            .overflow_hidden()
-                            .panel_surface(cx)
-                            .p(Spacing::Medium.pixels())
-                            .hover(move |el| {
-                                el.bg(theme.colors.element_hover)
-                                    .border_color(theme.colors.accent)
-                            })
-                            .child(notification_card_body(
-                                &notification,
-                                cx,
-                                false,
-                                &self.subscriber,
-                            ))
-                            .child(
-                                div()
-                                    .absolute()
-                                    .top(px(8.0))
-                                    .right(px(8.0))
-                                    .cursor_pointer()
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |_, _, _, _cx| {
-                                            dismiss_subscriber
-                                                .dispatch(NotificationCommand::Dismiss(id));
-                                        }),
-                                    )
-                                    .child(
-                                        Icon::new(config.icons.close())
-                                            .size(IconSize::XSmall)
-                                            .color(Color::Muted),
-                                    ),
-                            )
-                    })),
-            )
+            .when(paint, |el| el.child(self.build_stack(&config, cx)))
     }
 }
 
@@ -171,20 +287,22 @@ fn popup_targets(cx: &App) -> Vec<Option<DisplayId>> {
     }
 }
 
-fn close_popups(cx: &mut App) {
+fn close_popups(subscriber: &NotificationSubscriber, cx: &mut App) {
     let mut guard = POPUP_STATE.lock().unwrap();
     for (_, state) in guard.drain() {
         let _ = cx.update_window(state.handle, |_, window, _cx| {
             window.remove_window();
         });
     }
+    // A window that closed under the pointer never saw it leave.
+    subscriber.dispatch(NotificationCommand::HoldPopups(false));
 }
 
 fn sync_popup(subscriber: &NotificationSubscriber, cx: &mut App) {
     let config = cx.config().notification.clone();
     let notifications = subscriber.popup_notifications(config.popup_stack_limit);
     if notifications.is_empty() {
-        close_popups(cx);
+        close_popups(subscriber, cx);
         return;
     }
 

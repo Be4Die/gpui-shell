@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -97,6 +98,8 @@ pub enum NotificationCommand {
     SetDnd(bool),
     MarkAllRead,
     InvokeAction(u32, String),
+    /// Keep the popups from expiring, as while the pointer is over them.
+    HoldPopups(bool),
 }
 
 /// Event-driven notification service.
@@ -105,6 +108,8 @@ pub struct NotificationSubscriber {
     data: Mutable<NotificationData>,
     lifecycle: Lifecycle,
     jobs: JobQueue<NotificationCommand>,
+    /// While set, expiry timers wait instead of closing their popup.
+    popups_held: Arc<AtomicBool>,
 }
 
 impl NotificationSubscriber {
@@ -202,6 +207,9 @@ impl NotificationSubscriber {
                 }
                 data.recompute_unread();
             }
+            NotificationCommand::HoldPopups(held) => {
+                self.popups_held.store(held, Ordering::Relaxed);
+            }
             command if !self.lifecycle.is_up() => {
                 for id in self.target_ids(&command) {
                     remove_notification(&self.data, id);
@@ -225,7 +233,9 @@ impl NotificationSubscriber {
                 .into_iter()
                 .collect(),
             NotificationCommand::DismissAll => data.notifications.iter().map(|n| n.id).collect(),
-            NotificationCommand::SetDnd(_) | NotificationCommand::MarkAllRead => Vec::new(),
+            NotificationCommand::SetDnd(_)
+            | NotificationCommand::MarkAllRead
+            | NotificationCommand::HoldPopups(_) => Vec::new(),
         }
     }
 
@@ -308,6 +318,7 @@ impl ManagedService for NotificationSubscriber {
     fn start(&self) {
         let token = self.lifecycle.begin();
         let data = self.data.clone();
+        let popups_held = self.popups_held.clone();
 
         let subscriber = self.clone();
         self.jobs.run(token.clone(), move |command| {
@@ -336,7 +347,7 @@ impl ManagedService for NotificationSubscriber {
                 .remove::<NotificationServer, _>(OBJECT_PATH)
                 .await;
 
-            let server = NotificationServer::new(data, conn.clone());
+            let server = NotificationServer::new(data, conn.clone(), popups_held);
             if let Err(e) = conn.object_server().at(OBJECT_PATH, server).await {
                 warn!("Failed to serve the notification interface: {e}");
                 token.error(e.to_string());
@@ -397,10 +408,15 @@ struct NotificationServer {
     next_id: u32,
     next_timer_generation: u64,
     timer_generations: Arc<Mutex<HashMap<u32, u64>>>,
+    popups_held: Arc<AtomicBool>,
 }
 
 impl NotificationServer {
-    fn new(data: Mutable<NotificationData>, conn: Connection) -> Self {
+    fn new(
+        data: Mutable<NotificationData>,
+        conn: Connection,
+        popups_held: Arc<AtomicBool>,
+    ) -> Self {
         let next_id = first_free_id(&data.lock_ref());
         Self {
             data,
@@ -408,6 +424,7 @@ impl NotificationServer {
             next_id,
             next_timer_generation: 1,
             timer_generations: Arc::new(Mutex::new(HashMap::new())),
+            popups_held,
         }
     }
 }
@@ -553,8 +570,14 @@ impl NotificationServer {
             let conn = self.conn.clone();
             let data = self.data.clone();
             let timer_generations = self.timer_generations.clone();
+            let popups_held = self.popups_held.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(timeout_ms as u64)).await;
+                // The pointer is over the popups: whoever is reading them
+                // gets to finish. The clock resumes once it leaves.
+                while popups_held.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
 
                 let should_close = timer_generations
                     .lock()
