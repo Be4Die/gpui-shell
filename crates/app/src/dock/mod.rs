@@ -592,12 +592,8 @@ impl Dock {
         }
 
         let window_id = item.windows[index].id.clone();
-        if let Err(error) = self
-            .compositor
-            .dispatch(services::CompositorCommand::FocusWindow(window_id))
-        {
-            tracing::error!("Failed to focus window for '{}': {error}", item.name);
-        }
+        self.compositor
+            .dispatch(services::CompositorCommand::FocusWindow(window_id));
     }
 
     fn render_item(&self, item: &DockItem, cx: &mut Context<Self>) -> AnyElement {

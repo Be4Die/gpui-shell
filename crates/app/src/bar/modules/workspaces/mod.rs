@@ -35,12 +35,8 @@ impl Workspaces {
 
     /// Handle clicking on a workspace to focus it.
     fn focus_workspace(&self, workspace_id: i32) {
-        if let Err(e) = self
-            .compositor
-            .dispatch(CompositorCommand::FocusWorkspace(workspace_id))
-        {
-            tracing::error!("Failed to focus workspace {}: {}", workspace_id, e);
-        }
+        self.compositor
+            .dispatch(CompositorCommand::FocusWorkspace(workspace_id));
     }
 
     /// Resolve the compositor monitor name for the display this widget's
@@ -67,12 +63,8 @@ impl Workspaces {
 
     /// Handle scrolling to switch workspaces.
     fn scroll_workspace(&self, direction: i32) {
-        if let Err(e) = self
-            .compositor
-            .dispatch(CompositorCommand::ScrollWorkspace(direction))
-        {
-            tracing::error!("Failed to scroll workspace: {}", e);
-        }
+        self.compositor
+            .dispatch(CompositorCommand::ScrollWorkspace(direction));
     }
 
     fn workspace_label(

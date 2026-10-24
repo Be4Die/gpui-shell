@@ -115,7 +115,7 @@ impl LauncherView for WorkspacesView {
                     .child(Icon::new(icon).size(IconSize::Small)),
             )
             .on_click(move |_, _, _cx| {
-                let _ = compositor_clone.dispatch(CompositorCommand::FocusWorkspace(ws_id));
+                compositor_clone.dispatch(CompositorCommand::FocusWorkspace(ws_id));
             })
             .child(
                 div()
@@ -134,7 +134,7 @@ impl LauncherView for WorkspacesView {
 
     fn on_select(&self, index: usize, _vx: &ViewContext, cx: &mut App) -> bool {
         if let Some(ws) = self.matches.get(index) {
-            let _ = AppState::compositor(cx).dispatch(CompositorCommand::FocusWorkspace(ws.id));
+            AppState::compositor(cx).dispatch(CompositorCommand::FocusWorkspace(ws.id));
             true
         } else {
             false
