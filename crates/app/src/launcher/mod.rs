@@ -22,7 +22,8 @@ use gpui::{
 use ui::patterns::{LauncherFrame, footer_hints};
 use ui::{
     ActiveTheme, Color, Icon, IconSize, InputBuffer, Label, LabelCommon, Radius, ScrollStrategy,
-    Spacing, TextSize, ThumbnailCache, VirtualList, VirtualListScrollHandle, render_input_line,
+    Scrollbar, Spacing, TextSize, ThumbnailCache, VirtualList, VirtualListScrollHandle,
+    render_input_line,
 };
 
 use self::action::{Action, ActionPanel, Outcome};
@@ -131,6 +132,8 @@ pub struct Launcher {
     focus_handle: FocusHandle,
     /// Scroll state for detail and custom bodies.
     body_scroll: ScrollHandle,
+    /// Scroll state for the detail pane beside a list.
+    detail_scroll: ScrollHandle,
     list: VirtualListScrollHandle,
     registry: Vec<ModuleDescriptor>,
     metas: Vec<ModuleMeta>,
@@ -171,6 +174,7 @@ impl Launcher {
             input,
             focus_handle: cx.focus_handle(),
             body_scroll: ScrollHandle::new(),
+            detail_scroll: ScrollHandle::new(),
             list: VirtualListScrollHandle::new(),
             modules: registry.iter().map(|_| None).collect(),
             registry,
@@ -420,7 +424,8 @@ impl Launcher {
         match outcome {
             Outcome::Close => close(window, cx),
             Outcome::Stay => cx.notify(),
-            Outcome::Push(page) => self.push(page, cx),
+            Outcome::Push(page) => self.push(page, None, cx),
+            Outcome::PushWithInput(page, input) => self.push(page, Some(input), cx),
             Outcome::Pop => self.pop(cx),
             Outcome::PopToRoot => self.pop_to_root(cx),
             Outcome::SetQuery(text) => {
@@ -431,7 +436,7 @@ impl Launcher {
         }
     }
 
-    fn push(&mut self, page: Page, cx: &mut Context<Self>) {
+    fn push(&mut self, page: Page, input: Option<String>, cx: &mut Context<Self>) {
         let observe = page.observe(cx);
         self.stack.push(Pushed {
             page,
@@ -439,8 +444,10 @@ impl Launcher {
             input: self.input.text().to_string(),
             selected: self.selected_item().map(|item| item.id.clone()),
         });
-        self.input.set_text(String::new());
-        self.routed_input.clear();
+        let text = input.unwrap_or_default();
+        self.input.set_text(text.clone());
+        self.input.select_all();
+        self.routed_input = text;
         self.clear_body();
         self.invalidate(true, cx);
     }
@@ -916,13 +923,33 @@ impl Launcher {
                     )
                     .child(
                         div()
-                            .id("launcher-detail")
                             .flex_1()
                             .min_w(px(0.))
                             .h_full()
-                            .overflow_hidden()
-                            .overflow_y_scroll()
-                            .children(detail),
+                            .relative()
+                            .child(
+                                div()
+                                    .id("launcher-detail")
+                                    .size_full()
+                                    .overflow_hidden()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.detail_scroll)
+                                    .children(detail),
+                            )
+                            // Overlaid on the pane's padding like the list's
+                            // bar, so content never shifts when it appears;
+                            // sized from the last frame, so it shows once the
+                            // content has overflowed.
+                            .when(self.detail_scroll.max_offset().y > px(0.), |el| {
+                                el.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .right_0()
+                                        .child(Scrollbar::vertical(self.detail_scroll.clone())),
+                                )
+                            }),
                     )
                     .into_any_element()
             }

@@ -17,6 +17,8 @@ pub enum Outcome {
     Stay,
     /// Show `page` on top; Esc or Backspace on an empty search comes back.
     Push(Page),
+    /// `Push`, with the search starting as `input`, selected, so typing replaces it.
+    PushWithInput(Page, String),
     Pop,
     PopToRoot,
     /// Replace the whole input, prefix included. Leaves pushed pages first.
@@ -26,6 +28,13 @@ pub enum Outcome {
 impl Outcome {
     pub fn push<P: LauncherPage>(page: gpui::Entity<P>) -> Self {
         Outcome::Push(Page::new(page))
+    }
+
+    pub fn push_with_input<P: LauncherPage>(
+        page: gpui::Entity<P>,
+        input: impl Into<String>,
+    ) -> Self {
+        Outcome::PushWithInput(Page::new(page), input.into())
     }
 }
 

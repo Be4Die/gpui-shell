@@ -13,6 +13,8 @@ pub struct ConfigSignals {
     pub panels: Mutable<PanelsConfig>,
     /// [`State::pinned`]: the UI's list, else `dock.pinned`.
     pub pinned: Mutable<Vec<String>>,
+    /// Bumped on every publish, for pages that show the whole config.
+    pub revision: Mutable<u64>,
 }
 
 impl Global for ConfigSignals {}
@@ -24,6 +26,7 @@ impl ConfigSignals {
             dock: Mutable::new(cx.config().dock.clone()),
             panels: Mutable::new(cx.config().panels.clone()),
             pinned: Mutable::new(State::pinned(cx).to_vec()),
+            revision: Mutable::new(0),
         };
         cx.set_global(signals);
     }
@@ -39,5 +42,6 @@ impl ConfigSignals {
         signals.dock.set_neq(cx.config().dock.clone());
         signals.panels.set_neq(cx.config().panels.clone());
         signals.pinned.set_neq(State::pinned(cx).to_vec());
+        signals.revision.set(signals.revision.get() + 1);
     }
 }

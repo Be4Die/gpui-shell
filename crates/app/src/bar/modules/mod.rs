@@ -21,7 +21,7 @@ pub use clock::{Clock, ClockConfig};
 pub use keyboard_layout::{KeyboardLayout, KeyboardLayoutConfig};
 pub use launcher_btn::{LauncherBtn, LauncherBtnConfig};
 pub use mpris::{Mpris, MprisConfig};
-pub use registry::Widget;
+pub use registry::{Widget, WidgetKind};
 pub use settings::{Settings, SettingsConfig};
 pub use sysinfo::{SysInfo, SysInfoConfig};
 pub use tray::{Tray, TrayConfig};

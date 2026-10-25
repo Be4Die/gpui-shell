@@ -16,6 +16,8 @@ pub(super) fn render_detail(detail: &Detail, cx: &App) -> AnyElement {
     let colors = cx.theme().colors();
     let blocks = parse(&detail.markdown);
     let has_metadata = !detail.metadata.is_empty();
+    // A widget alone opens the pane; it only needs a rule when text precedes it.
+    let widget_follows_text = !blocks.is_empty() || has_metadata;
 
     div()
         .w_full()
@@ -47,6 +49,12 @@ pub(super) fn render_detail(detail: &Detail, cx: &App) -> AnyElement {
                                 .map(|(ix, entry)| render_metadata(ix, entry, cx)),
                         ),
                 )
+        })
+        .when_some(detail.widget.as_ref(), |el, widget| {
+            el.when(widget_follows_text, |el| {
+                el.child(div().w_full().h(px(1.)).bg(colors.border_variant))
+            })
+            .child(widget(cx))
         })
         .into_any_element()
 }

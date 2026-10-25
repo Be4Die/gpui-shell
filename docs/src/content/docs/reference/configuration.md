@@ -8,7 +8,7 @@ GPUi Shell loads configuration from:
 - `$XDG_CONFIG_HOME/gpuishell/config.toml`
 - or `~/.config/gpuishell/config.toml` (fallback)
 
-If the file does not exist, it is created with defaults on startup. Changes are hot-reloaded automatically.
+If the file does not exist, it is created with defaults on startup. Changes are hot-reloaded automatically. Most settings can also be edited from the launcher with `;cfg`, which rewrites only the keys you change (see the [Config Module](/reference/launcher/#config-module)).
 
 ## `config.toml` example
 

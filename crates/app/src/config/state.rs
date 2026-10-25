@@ -1,9 +1,10 @@
 //! Values the shell persists on its own, kept out of `config.toml`.
 //!
-//! `config.toml` is hand-written, so the app never writes to it: a dock pin
-//! toggled from the UI or a service mode set from `;s` lands in `state.toml`
-//! instead. That keeps the two writers apart - a config we failed to parse is
-//! never replaced by defaults the next time something is pinned.
+//! `config.toml` is hand-written, so the shell never serializes over it: a
+//! dock pin toggled from the UI or a service mode set from `;s` lands in
+//! `state.toml` instead. The config editor is the one exception, and it edits
+//! `config.toml` one key at a time through `toml_edit` (see `store`), so a
+//! file that does not parse is never written and nothing else in it moves.
 //!
 //! Each field here overrides its `config.toml` counterpart rather than
 //! replacing it, so a hand-written value stays live until the UI overrides it.

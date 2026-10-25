@@ -3,6 +3,7 @@
 mod persistence;
 mod signals;
 mod state;
+pub mod store;
 mod theme;
 
 use std::collections::BTreeMap;
@@ -71,10 +72,11 @@ impl Config {
     /// Initialize the global config.
     ///
     /// A file we can't parse costs the session its settings, but never the
-    /// file itself: the app only ever writes `state.toml` (see
-    /// [`State`]), and both watchers keep the last good value until the
-    /// next save fixes the file. `gpuishell --validate` reports where the
-    /// parse gave up.
+    /// file itself: the shell persists its own values to `state.toml` (see
+    /// [`State`]), the config editor edits `config.toml` one key at a time
+    /// through `toml_edit` (see [`store`]) and refuses a file that does not
+    /// parse, and both watchers keep the last good value until the next save
+    /// fixes the file. `gpuishell --validate` reports where the parse gave up.
     pub fn init(cx: &mut App) {
         let config = match persistence::load_or_create() {
             Ok(config) => config,
@@ -164,6 +166,11 @@ impl Config {
 
             cx.spawn(async move |cx| {
                 while rx.recv().await.is_some() {
+                    // A reload would throw away edits the user has not saved
+                    // or discarded yet.
+                    if store::has_pending() {
+                        continue;
+                    }
                     cx.update(|cx| {
                         tracing::info!("Config file changed, reloading");
                         Config::reload(cx);
@@ -264,7 +271,7 @@ fn notify_parse_failure(slot: LocalSlot, file: &str, err: &anyhow::Error, cx: &A
 /// Flatten a parse diagnostic into one line. The caret block toml draws is
 /// noise in a notification card, and the reason - `unknown variant ...` - is
 /// the line underneath it.
-fn one_line(err: &anyhow::Error) -> String {
+pub(super) fn one_line(err: &anyhow::Error) -> String {
     format!("{err:#}")
         .lines()
         .map(str::trim)

@@ -15,6 +15,17 @@ pub enum DockMonitors {
     All,
 }
 
+impl DockMonitors {
+    pub const ALL: [Self; 2] = [Self::PrimaryOnly, Self::All];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PrimaryOnly => "Primary only",
+            Self::All => "All monitors",
+        }
+    }
+}
+
 /// When the dock hides itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -34,6 +45,22 @@ pub enum DockVisibility {
     DodgeWindows,
 }
 
+impl DockVisibility {
+    pub const ALL: [Self; 3] = [
+        Self::AlwaysVisible,
+        Self::IntelligentHide,
+        Self::DodgeWindows,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AlwaysVisible => "Always visible",
+            Self::IntelligentHide => "Intelligent hide",
+            Self::DodgeWindows => "Dodge windows",
+        }
+    }
+}
+
 /// Hover effect applied to a dock item under the cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -49,6 +76,26 @@ pub enum DockHoverEffect {
     Glow,
     /// Icon both grows and rises under the cursor.
     MagnifyLift,
+}
+
+impl DockHoverEffect {
+    pub const ALL: [Self; 5] = [
+        Self::None,
+        Self::Lift,
+        Self::Magnify,
+        Self::Glow,
+        Self::MagnifyLift,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Lift => "Lift",
+            Self::Magnify => "Magnify",
+            Self::Glow => "Glow",
+            Self::MagnifyLift => "Magnify + lift",
+        }
+    }
 }
 
 /// Dock configuration.

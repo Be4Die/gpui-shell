@@ -102,6 +102,7 @@ impl NotificationData {
 pub enum LocalSlot {
     ConfigError,
     ThemeError,
+    ConfigWriteError,
 }
 
 impl LocalSlot {
@@ -715,7 +716,10 @@ impl NotificationServer {
 /// it hands out, so counting from 1 again would quietly delete old entries.
 /// Local slot ids live at the top of the range and are skipped.
 fn first_free_id(data: &NotificationData) -> u32 {
-    let lowest_slot = LocalSlot::ConfigError.id().min(LocalSlot::ThemeError.id());
+    let lowest_slot = LocalSlot::ConfigError
+        .id()
+        .min(LocalSlot::ThemeError.id())
+        .min(LocalSlot::ConfigWriteError.id());
     data.notifications
         .iter()
         .map(|n| n.id)

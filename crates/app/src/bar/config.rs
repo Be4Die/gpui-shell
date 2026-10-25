@@ -21,6 +21,17 @@ pub enum BarPosition {
 }
 
 impl BarPosition {
+    pub const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Top, Self::Bottom];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Left => "Left",
+            Self::Right => "Right",
+            Self::Top => "Top",
+            Self::Bottom => "Bottom",
+        }
+    }
+
     #[inline(always)]
     pub fn is_vertical(self) -> bool {
         matches!(self, Self::Left | Self::Right)
@@ -54,6 +65,19 @@ pub enum BarStyle {
     /// A transparent bar where each entry of `start`, `center` and `end` is
     /// its own pill. A nested list (`["Clock", "Notifications"]`) shares one.
     Bubbles,
+}
+
+impl BarStyle {
+    pub const ALL: [Self; 4] = [Self::Attached, Self::Floating, Self::Frame, Self::Bubbles];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Attached => "Attached",
+            Self::Floating => "Floating",
+            Self::Frame => "Frame",
+            Self::Bubbles => "Bubbles",
+        }
+    }
 }
 
 /// Geometry of a floating bar.
@@ -251,5 +275,13 @@ mod tests {
             ..BarConfig::default()
         };
         assert_eq!(bar.depth(), bar.size + bar.floating.gap);
+    }
+
+    #[test]
+    fn position_and_style_catalogues_are_complete() {
+        assert_eq!(BarPosition::ALL.len(), 4);
+        assert_eq!(BarStyle::ALL.len(), 4);
+        assert!(BarPosition::ALL.iter().all(|p| !p.label().is_empty()));
+        assert!(BarStyle::ALL.iter().all(|s| !s.label().is_empty()));
     }
 }

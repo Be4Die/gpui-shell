@@ -13,6 +13,19 @@ pub enum OsdPosition {
     Right,
 }
 
+impl OsdPosition {
+    pub const ALL: [Self; 4] = [Self::Top, Self::Bottom, Self::Left, Self::Right];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Top => "Top",
+            Self::Bottom => "Bottom",
+            Self::Left => "Left",
+            Self::Right => "Right",
+        }
+    }
+}
+
 /// OSD configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

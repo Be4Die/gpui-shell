@@ -1,12 +1,13 @@
 //! What a page shows: a [`List`], a [`Grid`], a [`Detail`] or its own
-//! [`Custom`] view. Plain data, rebuilt whenever the page notifies; the
-//! launcher owns ranking, drawing, selection and keys.
+//! [`Custom`] view. Plain data (plus a [`Detail`]'s optional widget builder),
+//! rebuilt whenever the page notifies; the launcher owns ranking, drawing,
+//! selection and keys.
 
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::SystemTime;
 
-use gpui::{AnyView, App, Context, Hsla, SharedString, Window};
+use gpui::{AnyElement, AnyView, App, Context, Hsla, SharedString, Window};
 use ui::{Color, IconName, IconSource};
 
 use super::action::{Action, ActionPanel};
@@ -491,6 +492,9 @@ impl DropdownItem {
     }
 }
 
+/// Builds a [`Detail`]'s mouse widget from the current app state.
+pub type DetailWidget = Rc<dyn Fn(&App) -> AnyElement>;
+
 /// Markdown above a key-value list. The markdown is a block subset:
 /// headings, paragraphs, `-` lists, `>` quotes, fenced code and
 /// `![alt](path)` images on their own line.
@@ -499,6 +503,7 @@ pub struct Detail {
     pub(super) chrome: Chrome,
     pub(super) markdown: SharedString,
     pub(super) metadata: Vec<Metadata>,
+    pub(super) widget: Option<DetailWidget>,
 }
 
 impl Detail {
@@ -515,6 +520,13 @@ impl Detail {
 
     pub fn metadata(mut self, entry: Metadata) -> Self {
         self.metadata.push(entry);
+        self
+    }
+
+    /// Drawn under the metadata. Mouse widgets whose handlers take `&mut App`
+    /// work here; focusable ones do not, the launcher keeps focus.
+    pub fn widget(mut self, build: impl Fn(&App) -> AnyElement + 'static) -> Self {
+        self.widget = Some(Rc::new(build));
         self
     }
 }

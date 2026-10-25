@@ -16,6 +16,24 @@ pub enum NotificationPopupPosition {
     BottomRight,
 }
 
+impl NotificationPopupPosition {
+    pub const ALL: [Self; 4] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
+        }
+    }
+}
+
 /// Notification module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
