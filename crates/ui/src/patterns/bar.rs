@@ -21,6 +21,18 @@ impl BarEdge {
     }
 }
 
+/// How the bar meets the screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BarShape {
+    /// Flush with the screen edge; the border is the screen-facing hairline.
+    Attached,
+    /// Inset from the edges; rounded and bordered all around.
+    Floating { radius: Pixels },
+    /// One side of a [`ScreenFrame`](super::ScreenFrame), which draws the
+    /// border, so the bar draws none.
+    Framed,
+}
+
 /// Where a section sits along the bar's long axis.
 #[derive(Clone, Copy)]
 enum Align {
@@ -34,7 +46,9 @@ enum Align {
 #[must_use = "BarSurface does nothing unless rendered"]
 pub struct BarSurface {
     edge: BarEdge,
+    shape: BarShape,
     border: bool,
+    background: Option<Hsla>,
     padding: Pixels,
     start: Vec<AnyElement>,
     center: Vec<AnyElement>,
@@ -45,7 +59,9 @@ impl BarSurface {
     pub fn new(edge: BarEdge) -> Self {
         Self {
             edge,
+            shape: BarShape::Attached,
             border: false,
+            background: None,
             padding: px(0.),
             start: Vec::new(),
             center: Vec::new(),
@@ -53,9 +69,20 @@ impl BarSurface {
         }
     }
 
-    /// Draw the hairline on the screen-facing edge.
+    pub fn shape(mut self, shape: BarShape) -> Self {
+        self.shape = shape;
+        self
+    }
+
+    /// Draw the border the shape calls for.
     pub fn border(mut self, border: bool) -> Self {
         self.border = border;
+        self
+    }
+
+    /// Fill in place of the theme background, e.g. a translucent one.
+    pub fn background(mut self, background: Hsla) -> Self {
+        self.background = Some(background);
         self
     }
 
@@ -86,7 +113,8 @@ impl RenderOnce for BarSurface {
         let colors = cx.theme().colors();
         let vertical = self.edge.is_vertical();
         let edge = self.edge;
-        let border = self.border;
+        // A floating bar's border runs all around; only an attached one has an edge hairline.
+        let border = self.border && self.shape == BarShape::Attached;
 
         let root = div()
             .size_full()
@@ -94,8 +122,15 @@ impl RenderOnce for BarSurface {
             .text_size(TextSize::Small.rems())
             .font_weight(FontWeight::MEDIUM)
             .text_color(colors.text)
-            .bg(colors.background)
-            .border_color(colors.border);
+            .bg(self.background.unwrap_or(colors.background))
+            .border_color(colors.border)
+            .when_some(
+                match self.shape {
+                    BarShape::Floating { radius } => Some(radius),
+                    BarShape::Attached | BarShape::Framed => None,
+                },
+                |el, radius| el.rounded(radius).when(self.border, |el| el.border_1()),
+            );
 
         let root = if vertical {
             root.flex_col()
@@ -145,6 +180,64 @@ fn section(vertical: bool, align: Align, widgets: Vec<AnyElement>) -> impl IntoE
                 Align::End => el.justify_end(),
             })
             .children(widgets)
+    }
+}
+
+/// A pill holding one or more widgets, for a bar whose own surface is
+/// transparent.
+#[derive(IntoElement)]
+#[must_use = "BarBubble does nothing unless rendered"]
+pub struct BarBubble {
+    vertical: bool,
+    background: Hsla,
+    border: Option<Hsla>,
+    children: Vec<AnyElement>,
+}
+
+impl BarBubble {
+    pub fn new(vertical: bool, background: Hsla) -> Self {
+        Self {
+            vertical,
+            background,
+            border: None,
+            children: Vec::new(),
+        }
+    }
+
+    pub fn border(mut self, border: Option<Hsla>) -> Self {
+        self.border = border;
+        self
+    }
+}
+
+impl ParentElement for BarBubble {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
+impl RenderOnce for BarBubble {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .justify_center()
+            .map(|el| {
+                if self.vertical {
+                    el.flex_col()
+                        .w_full()
+                        .py(Spacing::XSmall.pixels())
+                        .my(px(CHIP_OUTER_MARGIN))
+                        .rounded(Radius::Large.pixels())
+                } else {
+                    el.px(Spacing::XSmall.pixels())
+                        .mx(px(CHIP_OUTER_MARGIN))
+                        .rounded_full()
+                }
+            })
+            .bg(self.background)
+            .when_some(self.border, |el, color| el.border_1().border_color(color))
+            .children(self.children)
     }
 }
 

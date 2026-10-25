@@ -59,6 +59,8 @@ Every surface is its own layer-shell window:
 | Panels              | Overlay | One at a time (control center, tray, media, sysinfo)   |
 | Launcher            | Overlay | Singleton                                              |
 | OSD, notifications  | Overlay | Transient; the shell is the notification daemon        |
+| Frame               | Top     | One per display: draws `bar.style = "frame"` and, while a panel is open, catches clicks outside it to close it |
+| Frame exclusion     | Overlay | Three invisible strips per display that keep windows inside the frame |
 
 Windows are matched to compositor monitors by output name
 (`state::monitor_for_display`), never by position or order.

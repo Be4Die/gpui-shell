@@ -8,11 +8,13 @@
 //! Patterns own presentation only - state and keybindings stay in the app.
 
 pub mod bar;
+pub mod frame;
 pub mod launcher;
 pub mod osd;
 pub mod surface;
 
-pub use bar::{BarChip, BarEdge, BarSurface};
+pub use bar::{BarBubble, BarChip, BarEdge, BarShape, BarSurface};
+pub use frame::ScreenFrame;
 pub use launcher::{LauncherFrame, footer_hints};
 pub use osd::OsdIndicator;
 pub use surface::PanelSurface;

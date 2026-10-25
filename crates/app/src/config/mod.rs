@@ -18,12 +18,13 @@ pub use state::State;
 
 use crate::state::AppState;
 
-pub use crate::bar::config::{BarConfig, BarPosition, ModulesConfig};
+pub use crate::bar::config::{BarConfig, BarPosition, BarStyle, ModulesConfig};
 pub use crate::control_center::ControlCenterConfig;
 pub use crate::dock::DockConfig;
 pub use crate::launcher::config::LauncherConfig;
 pub use crate::notification::{NotificationConfig, NotificationPopupPosition};
 pub use crate::osd::{OsdConfig, OsdPosition};
+pub use crate::windows::PanelsConfig;
 
 /// Root application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +36,7 @@ pub struct Config {
     pub notification: NotificationConfig,
     pub control_center: ControlCenterConfig,
     pub dock: DockConfig,
+    pub panels: PanelsConfig,
     /// Startup mode per service, keyed by the lowercased service name
     /// (`audio`, `tray`, ...). Services absent from the map start eagerly.
     /// Setting a mode from `;s` writes `state.toml`, which then overrides
@@ -55,6 +57,7 @@ impl Default for Config {
             notification: NotificationConfig::default(),
             control_center: ControlCenterConfig::default(),
             dock: DockConfig::default(),
+            panels: PanelsConfig::default(),
             services: BTreeMap::new(),
             watch_config: true,
             watch_theme: true,

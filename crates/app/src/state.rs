@@ -74,6 +74,18 @@ pub(crate) fn logical_display_size(
     ))
 }
 
+/// [`logical_display_size`], falling back to gpui's bounds and then 1080p.
+pub(crate) fn display_extent(display_id: Option<DisplayId>, cx: &App) -> gpui::Size<gpui::Pixels> {
+    logical_display_size(display_id, cx)
+        .or_else(|| {
+            display_id
+                .and_then(|id| cx.find_display(id))
+                .or_else(|| cx.primary_display())
+                .map(|display| display.bounds().size)
+        })
+        .unwrap_or_else(|| gpui::size(gpui::px(1920.), gpui::px(1080.)))
+}
+
 pub(crate) fn record_window_display(
     handle: AnyWindowHandle,
     display_id: Option<DisplayId>,

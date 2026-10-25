@@ -14,7 +14,7 @@
     x  660–1132  crates/app            frame y 84–676
                    x 676–872   glue    AppState, watch, panel.rs, keybinds, Config, ipc
                    x 882       signal bus feeding every window
-                   x 892–1116  windows Bar, Dock, Panels, Launcher, OSD, popups
+                   x 892–1116  windows Bar, Dock, Panels, Launcher, OSD, popups, Frame
     x 1164–1496  crates/ui + assets    frame y 84–676
     y  708–900   INSIDE EVERY SERVICE  the lifecycle loop, left to right
 
@@ -28,7 +28,7 @@
   Colours are literal hex on purpose: some viewers can't resolve var().
 -->
   <title id="title">GPUi Shell architecture</title>
-  <desc id="desc">One process. crates/services talks to everything outside it: D-Bus daemons, compositor IPC, PulseAudio, PipeWire, udev, desktop files and wl-clipboard, each through a service that holds its state in a Mutable. crates/app holds every service in the AppState global; state::watch turns their signals into re-renders of the layer-shell windows: per-display bar and dock, panels, launcher, OSD and notification popups. Windows send commands back with dispatch. Config and theme files are hot-reloaded with inotify, and a second gpuishell invocation reaches the running one through a unix socket. crates/ui provides the components, shell patterns and theme the windows render with; crates/assets the icons; crates/story is a dev-only gallery.</desc>
+  <desc id="desc">One process. crates/services talks to everything outside it: D-Bus daemons, compositor IPC, PulseAudio, PipeWire, udev, desktop files and wl-clipboard, each through a service that holds its state in a Mutable. crates/app holds every service in the AppState global; state::watch turns their signals into re-renders of the layer-shell windows: per-display bar, dock and frame (which closes a panel on a click outside it), panels, launcher, OSD and notification popups. Windows send commands back with dispatch. Config and theme files are hot-reloaded with inotify, and a second gpuishell invocation reaches the running one through a unix socket. crates/ui provides the components, shell patterns and theme the windows render with; crates/assets the icons; crates/story is a dev-only gallery.</desc>
   <style>
     .bg{fill:#f6f8fa}
     .frame{fill:#ffffff;fill-opacity:.55;stroke:#d0d7de;stroke-dasharray:6 4}
@@ -200,13 +200,14 @@
 
   <!-- signal bus into every window -->
   <path class="edge" d="M872 252H882"/>
-  <path class="edge" d="M882 132V528"/>
+  <path class="edge" d="M882 132V604"/>
   <path class="edge" d="M882 132H892" marker-end="url(#arrow)"/>
   <path class="edge" d="M882 208H892" marker-end="url(#arrow)"/>
   <path class="edge" d="M882 292H892" marker-end="url(#arrow)"/>
   <path class="edge" d="M882 376H892" marker-end="url(#arrow)"/>
   <path class="edge" d="M882 452H892" marker-end="url(#arrow)"/>
   <path class="edge" d="M882 528H892" marker-end="url(#arrow)"/>
+  <path class="edge" d="M882 604H892" marker-end="url(#arrow)"/>
 
   <rect class="win" x="892" y="100" width="224" height="64" rx="8"/>
   <text class="t" x="908" y="124">Bar</text>
@@ -233,6 +234,10 @@
   <text class="t" x="908" y="520">Notification popups</text>
   <text class="s" x="908" y="542">Overlay</text>
 
+  <rect class="win" x="892" y="572" width="224" height="64" rx="8"/>
+  <text class="t" x="908" y="596">Frame</text>
+  <text class="s" x="908" y="618">per display · closes panels</text>
+
   <!-- windows → ui -->
   <path class="edge" d="M1116 244H1180" marker-end="url(#arrow)"/>
   <text class="lbl" x="1148" y="236" text-anchor="middle">render</text>
@@ -248,7 +253,7 @@
 
   <rect class="ui" x="1180" y="212" width="300" height="80" rx="8"/>
   <text class="t" x="1196" y="236">ui::patterns</text>
-  <text class="s" x="1196" y="258">BarChip · LauncherFrame</text>
+  <text class="s" x="1196" y="258">BarChip · ScreenFrame · LauncherFrame</text>
   <text class="s" x="1196" y="276">PanelSurface · OsdIndicator</text>
 
   <rect class="ui" x="1180" y="308" width="300" height="64" rx="8"/>

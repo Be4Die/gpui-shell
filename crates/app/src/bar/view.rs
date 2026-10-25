@@ -9,36 +9,52 @@ use gpui::{
     WindowBounds, WindowKind, WindowOptions, layer_shell::*, point, prelude::*, px,
 };
 use ui::ActiveTheme;
-use ui::patterns::BarSurface;
+use ui::patterns::{BarBubble, BarShape, BarSurface};
 
-use super::config::BarPosition;
+use super::config::{BarItem, BarPosition, BarStyle};
 use super::modules::Widget;
 use crate::config::{ActiveConfig, ConfigSignals};
 use crate::state::watch;
 
-/// One of the bar's three widget lists, kept with the names it was built from.
+/// One of the bar's three widget lists, kept with the entries it was built from.
 struct Section {
-    names: Vec<String>,
-    widgets: Vec<Widget>,
+    items: Vec<BarItem>,
+    /// One list per entry: what shares a bubble.
+    groups: Vec<Vec<Widget>>,
 }
 
 impl Section {
-    fn new(names: &[String], cx: &mut Context<Bar>) -> Self {
+    fn new(items: &[BarItem], cx: &mut Context<Bar>) -> Self {
         Self {
-            names: names.to_vec(),
-            widgets: Widget::create_many(names, cx),
+            items: items.to_vec(),
+            groups: items
+                .iter()
+                .map(|item| Widget::create_many(item.names(), cx))
+                .filter(|group| !group.is_empty())
+                .collect(),
         }
     }
 
     /// Rebuild only when the list changed, so untouched widgets keep their state.
-    fn sync(&mut self, names: &[String], cx: &mut Context<Bar>) {
-        if self.names != names {
-            *self = Self::new(names, cx);
+    fn sync(&mut self, items: &[BarItem], cx: &mut Context<Bar>) {
+        if self.items != items {
+            *self = Self::new(items, cx);
         }
     }
 
-    fn render(&self) -> Vec<AnyElement> {
-        self.widgets.iter().map(Widget::render).collect()
+    fn render(&self, bubble: Option<&dyn Fn() -> BarBubble>) -> Vec<AnyElement> {
+        match bubble {
+            Some(bubble) => self
+                .groups
+                .iter()
+                .map(|group| {
+                    bubble()
+                        .children(group.iter().map(Widget::render))
+                        .into_any_element()
+                })
+                .collect(),
+            None => self.groups.iter().flatten().map(Widget::render).collect(),
+        }
     }
 }
 
@@ -75,13 +91,34 @@ impl Render for Bar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(cx.theme().font_size);
         let bar = &cx.config().bar;
+        let shape = match bar.style {
+            BarStyle::Attached | BarStyle::Bubbles => BarShape::Attached,
+            BarStyle::Floating => BarShape::Floating {
+                radius: px(bar.floating.radius),
+            },
+            BarStyle::Frame => BarShape::Framed,
+        };
+
+        let theme = cx.theme();
+        let fill = bar.background_color(theme);
+        let vertical = bar.is_vertical();
+        let border = bar.show_border.then_some(theme.colors().border);
+        let bubble = || BarBubble::new(vertical, fill).border(border);
+        // With bubbles the fill and border move onto the pills.
+        let bubble = (bar.style == BarStyle::Bubbles).then_some(&bubble as &dyn Fn() -> BarBubble);
 
         BarSurface::new(self.position.edge())
-            .border(bar.show_border)
+            .shape(shape)
+            .background(if bubble.is_some() {
+                gpui::transparent_black()
+            } else {
+                fill
+            })
+            .border(bar.show_border && bubble.is_none())
             .padding(px(bar.padding))
-            .start(self.start.render())
-            .center(self.center.render())
-            .end(self.end.render())
+            .start(self.start.render(bubble))
+            .center(self.center.render(bubble))
+            .end(self.end.render(bubble))
     }
 }
 
@@ -102,30 +139,29 @@ pub fn window_options(
     // between the anchors would be the protocol-blessed alternative, but
     // gpui sets a `wp_viewport` destination from these bounds before the
     // configure arrives, and a zero there is a protocol error.
-    let display_size = crate::state::logical_display_size(display_id, cx)
-        .or_else(|| {
-            display_id
-                .and_then(|id| cx.find_display(id))
-                .or_else(|| cx.primary_display())
-                .map(|display| display.bounds().size)
-        })
-        .unwrap_or_else(|| Size::new(px(1920.), px(1080.)));
+    let display_size = crate::state::display_extent(display_id, cx);
     let config = cx.config();
+    // A floating bar keeps `gap` from every edge, so it is that much shorter at both ends.
+    let gap = match config.bar.style {
+        BarStyle::Floating => config.bar.floating.gap.max(0.),
+        BarStyle::Attached | BarStyle::Frame | BarStyle::Bubbles => 0.,
+    };
+    let length = |extent: gpui::Pixels| (extent - px(gap * 2.)).max(px(1.));
     let (window_size, anchor) = match config.bar.position {
         BarPosition::Left => (
-            Size::new(px(config.bar.size), display_size.height),
+            Size::new(px(config.bar.size), length(display_size.height)),
             Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
         ),
         BarPosition::Right => (
-            Size::new(px(config.bar.size), display_size.height),
+            Size::new(px(config.bar.size), length(display_size.height)),
             Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
         ),
         BarPosition::Top => (
-            Size::new(display_size.width, px(config.bar.size)),
+            Size::new(length(display_size.width), px(config.bar.size)),
             Anchor::LEFT | Anchor::RIGHT | Anchor::TOP,
         ),
         BarPosition::Bottom => (
-            Size::new(display_size.width, px(config.bar.size)),
+            Size::new(length(display_size.width), px(config.bar.size)),
             Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM,
         ),
     };
@@ -143,8 +179,9 @@ pub fn window_options(
             namespace: "bar".to_string(),
             layer: Layer::Top,
             anchor,
+            // Compositors add the margin on the anchored edge to this zone.
             exclusive_zone: Some(px(config.bar.size)),
-            margin: None,
+            margin: (gap > 0.).then(|| (px(gap), px(gap), px(gap), px(gap))),
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         }),
@@ -154,11 +191,14 @@ pub fn window_options(
 
 /// Initialize the bar using the current global config.
 pub fn init(cx: &mut App) {
-    // Only the anchor and exclusive zone need new windows; `Bar` applies the
-    // rest in place.
+    // Only the anchor, exclusive zone and margins need new windows; `Bar`
+    // applies the rest in place.
     let layout = ConfigSignals::global(cx)
         .bar
-        .signal_ref(|bar| (bar.position, bar.size))
+        .signal_ref(|bar| {
+            let gap = (bar.style == BarStyle::Floating).then_some(bar.floating.gap);
+            (bar.position, bar.size, gap)
+        })
         .dedupe()
         .to_stream();
 
@@ -170,7 +210,10 @@ pub fn init(cx: &mut App) {
 
         tracing::info!("Bar opened");
 
-        cx.update(open_all_bar_windows);
+        cx.update(|cx| {
+            open_all_bar_windows(cx);
+            crate::frame::reopen(cx);
+        });
 
         let mut layout = layout.skip(1);
         while layout.next().await.is_some() {
@@ -232,4 +275,5 @@ pub fn reload(cx: &mut App) {
     for handle in old_windows {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
     }
+    crate::frame::reopen(cx);
 }

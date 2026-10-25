@@ -1,8 +1,6 @@
 //! Right-click context menu for a dock item: pin/unpin, new window.
 
-use gpui::{
-    Context, FocusHandle, Focusable, MouseButton, Render, Subscription, Window, div, prelude::*, px,
-};
+use gpui::{Context, FocusHandle, Focusable, MouseButton, Render, Window, div, prelude::*, px};
 use ui::{ActiveTheme, Radius, Spacing};
 
 use crate::keybinds::Cancel;
@@ -19,7 +17,6 @@ pub(super) struct DockContextMenu {
     app_name: String,
     icon_path: Option<std::path::PathBuf>,
     focus_handle: FocusHandle,
-    focus_out_subscription: Option<Subscription>,
 }
 
 impl DockContextMenu {
@@ -38,7 +35,6 @@ impl DockContextMenu {
             app_name,
             icon_path,
             focus_handle: _cx.focus_handle(),
-            focus_out_subscription: None,
         }
     }
 
@@ -74,14 +70,6 @@ impl Focusable for DockContextMenu {
 
 impl Render for DockContextMenu {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.focus_out_subscription.is_none() {
-            self.focus_out_subscription =
-                Some(
-                    cx.on_focus_out(&self.focus_handle, window, move |_, _, window, _cx| {
-                        window.remove_window();
-                    }),
-                );
-        }
         if !self.focus_handle.is_focused(window) {
             self.focus_handle.focus(window, cx);
         }

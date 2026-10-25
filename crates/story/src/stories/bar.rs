@@ -5,7 +5,7 @@
 //! on a vertical one.
 
 use gpui::{AnyElement, Hsla, div};
-use ui::patterns::{BarChip, BarEdge, BarSurface};
+use ui::patterns::{BarBubble, BarChip, BarEdge, BarShape, BarSurface, ScreenFrame};
 
 use crate::prelude::*;
 
@@ -97,6 +97,76 @@ fn vertical_bar(cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+fn floating_bar(cx: &App) -> AnyElement {
+    div()
+        .w_full()
+        .h(px(48.))
+        .p(px(8.))
+        .child(
+            BarSurface::new(BarEdge::Top)
+                .shape(BarShape::Floating { radius: px(12.) })
+                .border(true)
+                .padding(px(10.))
+                .start([chip(IconName::Layout, "1", false, cx)])
+                .end([chip(IconName::Clock, "09:41", false, cx)]),
+        )
+        .into_any_element()
+}
+
+fn bubbles_bar(cx: &App) -> AnyElement {
+    let colors = cx.theme().colors();
+    let bubble = || BarBubble::new(false, colors.background).border(Some(colors.border));
+    div()
+        .w_full()
+        .h(px(32.))
+        .bg(colors.surface_background)
+        .child(
+            BarSurface::new(BarEdge::Top)
+                .background(gpui::transparent_black())
+                .padding(px(8.))
+                .start([
+                    bubble()
+                        .child(chip(IconName::Layout, "1", false, cx))
+                        .into_any_element(),
+                    bubble()
+                        .child(chip(IconName::Cpu, "12%", false, cx))
+                        .child(chip(IconName::MemoryStick, "38%", false, cx))
+                        .into_any_element(),
+                ])
+                .end([bubble()
+                    .child(chip(IconName::Clock, "09:41", false, cx))
+                    .into_any_element()]),
+        )
+        .into_any_element()
+}
+
+fn framed_screen(cx: &App) -> AnyElement {
+    let colors = cx.theme().colors();
+    div()
+        .relative()
+        .w(px(480.))
+        .h(px(270.))
+        .bg(colors.surface_background)
+        .child(
+            div().absolute().size_full().child(
+                ScreenFrame::new(BarEdge::Top, px(32.), colors.background)
+                    .thickness(px(6.))
+                    .radius(px(16.))
+                    .border(Some(colors.border)),
+            ),
+        )
+        .child(
+            div().absolute().w_full().h(px(32.)).child(
+                BarSurface::new(BarEdge::Top)
+                    .shape(BarShape::Framed)
+                    .padding(px(10.))
+                    .start([chip(IconName::Layout, "1", false, cx)])
+                    .end([chip(IconName::Clock, "09:41", false, cx)]),
+            ),
+        )
+        .into_any_element()
+}
+
 /// A chip with no background or border - what `widget_background = false`
 /// and `widget_border = false` in the bar config look like.
 fn bare_chips(cx: &App) -> AnyElement {
@@ -133,6 +203,13 @@ impl Render for BarStory {
                 ),
                 example("Vertical", vertical_bar(cx))
                     .description("Chips stack, radii tighten, labels drop a size."),
+                example("Floating", floating_bar(cx))
+                    .description("Inset from the edges, rounded and bordered all around."),
+                example("Bubbles", bubbles_bar(cx)).description(
+                    "A transparent bar; each entry gets its own pill, groups share one.",
+                ),
+                example("Frame", framed_screen(cx))
+                    .description("The bar carried around the screen, with rounded inner corners."),
                 example("Chip without chrome", bare_chips(cx))
                     .description("Background and border are the app's call, so both are optional."),
             ],
