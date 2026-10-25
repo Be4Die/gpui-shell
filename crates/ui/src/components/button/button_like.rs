@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::theme::{ActiveTheme, Radius};
+use crate::theme::{ActiveTheme, Fade, Opacity, Radius};
 use gpui::{
     AnyElement, AnyView, App, ClickEvent, CursorStyle, DefiniteLength, Div, ElementId, FocusHandle,
     Hsla, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, StyleRefinement, Window,
@@ -94,16 +94,16 @@ impl TintColor {
     fn enabled_styles(self, cx: &App) -> ButtonLikeStyles {
         let fg = self.foreground(cx);
         ButtonLikeStyles {
-            background: fg.opacity(0.15),
-            border: fg.opacity(0.55),
+            background: fg.fade(Opacity::Faint),
+            border: fg.fade(Opacity::Muted),
         }
     }
 
     fn hovered_styles(self, cx: &App) -> ButtonLikeStyles {
         let fg = self.foreground(cx);
         ButtonLikeStyles {
-            background: fg.opacity(0.25),
-            border: fg.opacity(0.60),
+            background: fg.fade(Opacity::Subtle),
+            border: fg.fade(Opacity::Soft),
         }
     }
 }
@@ -184,8 +184,8 @@ impl ButtonStyle {
             ButtonStyle::Tinted(tint) => {
                 let fg = tint.foreground(cx);
                 ButtonLikeStyles {
-                    background: fg.opacity(0.32),
-                    border: fg.opacity(0.65),
+                    background: fg.fade(Opacity::Muted),
+                    border: fg.fade(Opacity::Soft),
                 }
             }
             ButtonStyle::Outlined => ButtonLikeStyles {

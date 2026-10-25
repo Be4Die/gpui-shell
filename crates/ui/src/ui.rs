@@ -16,9 +16,10 @@ pub use components::*;
 pub use media::{format_track_time, image_source, track_progress};
 pub use styles::ElevationIndex;
 pub use theme::{
-    ActiveTheme, Appearance, Base16Palette, Color, IconSize, Radius, Spacing, StatusColors,
-    StatusColorsRefinement, StoredTheme, TextSize, Theme, ThemeColors, ThemeColorsRefinement,
-    ThemeScheme, WallpaperPalettes, builtin_schemes,
+    ActiveTheme, Appearance, Base16Palette, Color, Fade, IconSize, Opacity, Radius, Spacing,
+    StatusColors, StatusColorsRefinement, StoredTheme, TextSize, Theme, ThemeColors,
+    ThemeColorsRefinement, ThemeScheme, WallpaperPalettes, builtin_schemes, inset_radius,
+    nested_radius, radius_scale,
 };
 pub use thumbnail::{Thumbnail, ThumbnailCache, ThumbnailKey};
 pub use traits::*;

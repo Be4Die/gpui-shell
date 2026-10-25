@@ -1,7 +1,7 @@
 use gpui::{AnyElement, App, div, prelude::*, px};
 
 use super::buffer::{CursorPlacement, InputBuffer};
-use crate::ActiveTheme;
+use crate::{ActiveTheme, Radius};
 
 pub fn render_input_line(buffer: &InputBuffer, placeholder: &str, cx: &App) -> AnyElement {
     let colors = cx.theme().colors();
@@ -38,7 +38,7 @@ pub fn render_input_line(buffer: &InputBuffer, placeholder: &str, cx: &App) -> A
             div()
                 .px(px(2.))
                 .bg(colors.element_selected)
-                .rounded(px(3.))
+                .rounded(Radius::Small.pixels())
                 .child(selected.to_string()),
         );
     }
@@ -94,7 +94,7 @@ pub fn render_masked_input_line(
             div()
                 .px(px(1.))
                 .bg(colors.element_selected)
-                .rounded(px(2.))
+                .rounded(Radius::XSmall.pixels())
                 .child(selected),
         );
     }

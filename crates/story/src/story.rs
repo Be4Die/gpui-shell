@@ -39,7 +39,7 @@ pub mod prelude {
 
 use std::ops::DerefMut;
 
-use gpui::{Bounds, WindowBounds, WindowOptions, size};
+use gpui::{Bounds, Pixels, WindowBounds, WindowOptions, size};
 use gpui_platform::application;
 use prelude::*;
 use schemes::schemes;
@@ -348,14 +348,23 @@ pub static STORIES: &[StoryEntry] = &[
 struct Gallery {
     selected_index: usize,
     current_view: Option<AnyView>,
+    scroll: gpui::ScrollHandle,
+    /// `STORY_SCROLL=600`: start the content pane scrolled down, for a
+    /// screenshot of an example further down the page.
+    scroll_to: Option<Pixels>,
 }
 
 impl Gallery {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let selected_index = 0;
+        let selected_index = initial_story();
         Self {
             selected_index,
             current_view: Some((STORIES[selected_index].build)(window, cx.deref_mut())),
+            scroll: gpui::ScrollHandle::new(),
+            scroll_to: std::env::var("STORY_SCROLL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .map(px),
         }
     }
 
@@ -376,7 +385,12 @@ impl Render for Gallery {
         }
         let view = self.current_view.clone().unwrap();
         let colors = cx.theme().colors();
+        let translucent = cx.theme().opacity < 1.0;
         let weak = cx.entity().downgrade();
+        if let Some(offset) = self.scroll_to {
+            // Every frame, since the first layout clamps it to an empty page.
+            self.scroll.set_offset(gpui::point(px(0.), -offset));
+        }
 
         h_flex()
             .size_full()
@@ -396,6 +410,7 @@ impl Render for Gallery {
                             .gap(Spacing::Medium.pixels())
                             .child(Headline::new("gpui-shell components").size(HeadlineSize::Small))
                             .child(self.render_theme_switcher(cx))
+                            .child(self.render_shape_controls(cx))
                             .child(Divider::horizontal()),
                     )
                     .child(
@@ -411,20 +426,73 @@ impl Render for Gallery {
             )
             // ---- Content pane ----
             .child(
-                v_flex()
-                    .id("content-scroll")
+                gpui::div()
+                    .relative()
                     .flex_1()
                     .h_full()
-                    .overflow_y_scroll()
-                    .p(Spacing::XXLarge.pixels())
-                    .gap(Spacing::Large.pixels())
+                    .children(translucent.then(|| backdrop(cx)))
                     .child(
-                        Headline::new(STORIES[self.selected_index].name).size(HeadlineSize::Medium),
-                    )
-                    .child(Divider::horizontal())
-                    .child(view),
+                        v_flex()
+                            .id("content-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.scroll)
+                            .p(Spacing::XXLarge.pixels())
+                            .gap(Spacing::Large.pixels())
+                            .child(
+                                Headline::new(STORIES[self.selected_index].name)
+                                    .size(HeadlineSize::Medium),
+                            )
+                            .child(Divider::horizontal())
+                            .child(view),
+                    ),
             )
     }
+}
+
+/// Something loud behind the content, so a translucent surface has
+/// something to be translucent over.
+fn backdrop(cx: &App) -> impl IntoElement {
+    let colors = cx.theme().colors();
+    let status = &colors.status;
+    let blob = |color: gpui::Hsla, size: f32, top: f32, left: f32| {
+        gpui::div()
+            .absolute()
+            .top(px(top))
+            .left(px(left))
+            .size(px(size))
+            .rounded(px(size / 2.))
+            .bg(color)
+    };
+    gpui::div()
+        .absolute()
+        .inset_0()
+        .overflow_hidden()
+        .bg(gpui::linear_gradient(
+            135.,
+            gpui::linear_color_stop(colors.accent, 0.),
+            gpui::linear_color_stop(status.error, 1.),
+        ))
+        .child(blob(status.success, 260., 40., 120.))
+        .child(blob(status.warning, 180., 220., 420.))
+        .child(blob(colors.text, 140., 90., 640.))
+        .child(blob(status.info, 320., 320., 180.))
+        .children((0..14).map(|i| {
+            gpui::div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(i as f32 * 90.))
+                .w(px(12.))
+                .bg(colors.background)
+        }))
+        // A light wash keeps the story captions legible over the noise.
+        .child(
+            gpui::div()
+                .absolute()
+                .inset_0()
+                .bg(colors.background.fade(Opacity::Subtle)),
+        )
 }
 
 impl Gallery {
@@ -505,11 +573,132 @@ impl Gallery {
                 })
             }))
     }
+
+    /// Radius scale and surface opacity, the two theme knobs that are not
+    /// colours. Every pattern and component should survive each stop.
+    fn render_shape_controls(&self, cx: &Context<Self>) -> impl IntoElement {
+        const SCALES: [f32; 5] = [0.0, 0.5, 1.0, 1.5, 2.0];
+        const OPACITIES: [f32; 4] = [1.0, 0.85, 0.7, 0.5];
+        let theme = cx.theme();
+        let (scale, opacity) = (theme.radius_scale, theme.opacity);
+        let weak = cx.entity().downgrade();
+
+        let row = |label: &'static str, buttons: Vec<Button>| {
+            h_flex()
+                .gap(Spacing::XSmall.pixels())
+                .items_center()
+                .child(
+                    Label::new(label)
+                        .size(TextSize::XSmall)
+                        .color(Color::Muted)
+                        .into_element(),
+                )
+                .children(buttons)
+        };
+        let button = |id: String, label: String, current: bool, apply: fn(&mut Theme, f32), value: f32| {
+            let weak = weak.clone();
+            Button::new(SharedString::from(id), label)
+                .size(ButtonSize::Compact)
+                .style(if current {
+                    ButtonStyle::Filled
+                } else {
+                    ButtonStyle::Subtle
+                })
+                .toggle_state(current)
+                .on_click(move |_event, _window, cx| {
+                    let mut theme = cx.theme().clone();
+                    apply(&mut theme, value);
+                    Theme::set(theme, cx);
+                    weak.update(cx, |_, cx| cx.notify()).ok();
+                })
+        };
+
+        v_flex()
+            .gap(Spacing::XSmall.pixels())
+            .child(row(
+                "Radius",
+                SCALES
+                    .iter()
+                    .map(|value| {
+                        button(
+                            format!("radius-{value}"),
+                            format!("{value}"),
+                            (scale - value).abs() < f32::EPSILON,
+                            Theme::set_radius_scale,
+                            *value,
+                        )
+                    })
+                    .collect(),
+            ))
+            .child(row(
+                "Opacity",
+                OPACITIES
+                    .iter()
+                    .map(|value| {
+                        button(
+                            format!("opacity-{value}"),
+                            format!("{}%", (value * 100.) as u32),
+                            (opacity - value).abs() < f32::EPSILON,
+                            Theme::set_opacity,
+                            *value,
+                        )
+                    })
+                    .collect(),
+            ))
+    }
 }
 
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
+
+/// Startup state from the environment, so a screenshot run needs no clicks:
+/// `STORY=Bar STORY_RADIUS_SCALE=0 STORY_OPACITY=0.7 STORY_SCHEME="Gruvbox Dark"`.
+fn apply_env(cx: &mut App) {
+    let mut theme = cx.theme().clone();
+    if let Some(scheme) = std::env::var("STORY_SCHEME")
+        .ok()
+        .and_then(|name| schemes().iter().find(|s| s.name.eq_ignore_ascii_case(&name)))
+    {
+        theme.set_palette(scheme.name.clone(), scheme.palette);
+    }
+    if let Some(scale) = std::env::var("STORY_RADIUS_SCALE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        theme.set_radius_scale(scale);
+    }
+    if let Some(opacity) = std::env::var("STORY_OPACITY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        theme.set_opacity(opacity);
+    }
+    Theme::set(theme, cx);
+}
+
+/// `STORY_SIZE=1100x1150` for a taller window when a story does not fit.
+fn window_size() -> gpui::Size<Pixels> {
+    std::env::var("STORY_SIZE")
+        .ok()
+        .and_then(|value| {
+            let (w, h) = value.split_once('x')?;
+            Some(size(px(w.parse().ok()?), px(h.parse().ok()?)))
+        })
+        .unwrap_or_else(|| size(px(1100.0), px(760.0)))
+}
+
+/// The story `STORY` names, or the first one.
+fn initial_story() -> usize {
+    std::env::var("STORY")
+        .ok()
+        .and_then(|name| {
+            STORIES
+                .iter()
+                .position(|story| story.name.eq_ignore_ascii_case(&name))
+        })
+        .unwrap_or(0)
+}
 
 fn main() {
     application()
@@ -517,11 +706,13 @@ fn main() {
         .run(|cx: &mut App| {
             Theme::init(cx);
             ui::init(cx);
+            apply_env(cx);
 
-            let bounds = Bounds::centered(None, size(px(1100.0), px(760.0)), cx);
+            let bounds = Bounds::centered(None, window_size(), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    app_id: Some("story".into()),
                     ..Default::default()
                 },
                 |window, cx| {

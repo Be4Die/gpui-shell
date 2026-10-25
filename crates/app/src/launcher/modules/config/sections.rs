@@ -9,14 +9,17 @@ use super::config::ConfigEditorConfig;
 use super::dock_preview::dock_preview;
 use super::launcher_preview::launcher_preview;
 use super::layout_page::LayoutPage;
+use super::look_page::LookPage;
 use super::notification_preview::notification_preview;
 use super::osd_preview::osd_preview;
-use super::schema::{Editable, Field, Group, TextHint, flatten, lens};
-use crate::bar::config::{BarConfig, BarFloatingConfig, BarFrameConfig, BarPosition, BarStyle};
+use super::schema::{ConfigPath, Editable, Field, Group, TextHint, flatten, lens};
+use crate::bar::config::{
+    BarConfig, BarFloatingConfig, BarFrameConfig, BarPosition, BarSegmentsConfig, BarStyle,
+};
 use crate::bar::modules::{
-    ActiveWindowConfig, BatteryConfig, ClockConfig, KeyboardLayoutConfig,
-    MprisConfig as BarMprisConfig, SysInfoConfig as BarSysInfoConfig, TrayConfig, WidgetKind,
-    WorkspacesConfig as BarWorkspacesConfig,
+    self as bar_widgets, ActiveWindowConfig, BarWidgetMeta, BatteryConfig, ClockConfig,
+    KeyboardLayoutConfig, MprisConfig as BarMprisConfig, SysInfoConfig as BarSysInfoConfig,
+    TrayConfig, WorkspacesConfig as BarWorkspacesConfig,
 };
 use crate::config::ActiveConfig;
 use crate::config::Config;
@@ -65,6 +68,14 @@ impl Editable for Config {
             Group::new(
                 "",
                 vec![
+                    Field::custom("look", "Look", |path: ConfigPath<Self>, cx: &mut App| {
+                        LookPage::open(
+                            path.then("bar", |c: &Self| &c.bar, |c: &mut Self| &mut c.bar),
+                            cx,
+                        )
+                    })
+                    .icon(IconName::Sparkles)
+                    .describe("Blocky, rounded or floating: one preset for the whole bar"),
                     Field::nested("bar", "Bar", |c: &Self| &c.bar, |c: &mut Self| &mut c.bar)
                         .icon(IconName::Layout)
                         .describe("Size, position, style and widgets"),
@@ -149,6 +160,14 @@ impl Editable for BarConfig {
     fn groups() -> Vec<Group<Self>> {
         vec![
             Group::new(
+                "Look",
+                vec![
+                    Field::custom("look", "Look", LookPage::open)
+                        .icon(IconName::Sparkles)
+                        .describe("Blocky, rounded or floating; sets the keys below in one go"),
+                ],
+            ),
+            Group::new(
                 "Widgets",
                 vec![
                     Field::custom("start", "Layout", LayoutPage::open)
@@ -193,18 +212,19 @@ impl Editable for BarConfig {
                         .range(16.0, 96.0)
                         .unit("px")
                         .describe("Thickness along the bar's main axis"),
-                    Field::number("padding", "Padding", lens!(padding as f64))
+                    Field::number("padding", "End padding", lens!(padding or 2.0))
                         .range(0.0, 64.0)
                         .unit("px")
-                        .describe("Space between the edge and the first widget"),
+                        .describe(
+                            "Space before the first and after the last widget. Unset, it \
+                             matches the space between widgets",
+                        ),
                 ],
             ),
             Group::new(
                 "Appearance",
                 vec![
-                    Field::number("background", "Background opacity", lens!(background as f64))
-                        .range(0.0, 1.0)
-                        .step(0.05),
+                    opacity_field("Bar opacity", lens!(opacity or 1.0)),
                     Field::toggle("show_border", "Border", lens!(show_border))
                         .describe("Hairline on the inner edge, or around a floating bar"),
                     Field::toggle(
@@ -213,11 +233,23 @@ impl Editable for BarConfig {
                         lens!(widget_background),
                     ),
                     Field::toggle("widget_border", "Widget border", lens!(widget_border)),
+                    Field::toggle("widget_stretch", "Widget stretch", lens!(widget_stretch))
+                        .describe(
+                            "Chips and workspace cells fill the bar's thickness and sit flush, \
+                             for a blocky bar",
+                        ),
                 ],
             ),
             Group::new(
                 "Styles",
                 vec![
+                    Field::nested(
+                        "segments",
+                        "Segments",
+                        |c: &Self| &c.segments,
+                        |c: &mut Self| &mut c.segments,
+                    )
+                    .describe("Gap, inset and padding of the boxes widgets sit in"),
                     Field::nested(
                         "floating",
                         "Floating",
@@ -238,6 +270,32 @@ impl Editable for BarConfig {
     }
 }
 
+impl Editable for BarSegmentsConfig {
+    fn title() -> &'static str {
+        "Bar segments"
+    }
+
+    fn fields() -> Vec<Field<Self>> {
+        const PER_STYLE: &str =
+            "Unset: 6 / 3 / 4 px with bubbles, 0 with every other style. Reset to default to \
+             follow the style again";
+        vec![
+            Field::number("gap", "Gap", lens!(gap or 0.0))
+                .range(0.0, 32.0)
+                .unit("px")
+                .describe(PER_STYLE),
+            Field::number("inset", "Inset", lens!(inset or 0.0))
+                .range(0.0, 16.0)
+                .unit("px")
+                .describe("Space between a segment and the bar's long edges"),
+            Field::number("padding", "Padding", lens!(padding or 0.0))
+                .range(0.0, 32.0)
+                .unit("px")
+                .describe("Space inside a segment's two ends"),
+        ]
+    }
+}
+
 impl Editable for BarFloatingConfig {
     fn title() -> &'static str {
         "Floating bar"
@@ -249,11 +307,30 @@ impl Editable for BarFloatingConfig {
                 .range(0.0, 64.0)
                 .unit("px")
                 .describe("Distance from the screen edges"),
-            Field::number("radius", "Corner radius", lens!(radius as f64))
-                .range(0.0, 48.0)
-                .unit("px"),
+            Field::number(
+                "radius",
+                "Corner radius",
+                lens!(radius or f64::from(BarFloatingConfig::RADIUS.base())),
+            )
+            .range(0.0, 48.0)
+            .unit("px")
+            .describe(RADIUS_FOLLOWS_THEME),
         ]
     }
+}
+
+/// Why an unset radius or opacity shows a number the user never typed.
+const RADIUS_FOLLOWS_THEME: &str =
+    "Unset, the corner follows the theme's radius scale. Reset to default to follow it again";
+const OPACITY_FOLLOWS_THEME: &str =
+    "Unset, the surface follows the theme's opacity. Reset to default to follow it again";
+
+/// The per-surface override of the theme's surface opacity.
+fn opacity_field<S: Editable>(label: &'static str, lens: super::schema::Lens<S, f64>) -> Field<S> {
+    Field::number("opacity", label, lens)
+        .range(0.0, 1.0)
+        .step(0.05)
+        .describe(OPACITY_FOLLOWS_THEME)
 }
 
 impl Editable for BarFrameConfig {
@@ -267,58 +344,60 @@ impl Editable for BarFrameConfig {
                 .range(0.0, 32.0)
                 .unit("px")
                 .describe("Width of the three edges the bar is not on"),
-            Field::number("radius", "Inner radius", lens!(radius as f64))
-                .range(0.0, 48.0)
-                .unit("px"),
+            Field::number(
+                "radius",
+                "Inner radius",
+                lens!(radius or f64::from(BarFrameConfig::RADIUS.base())),
+            )
+            .range(0.0, 48.0)
+            .unit("px")
+            .describe(RADIUS_FOLLOWS_THEME),
         ]
     }
 }
 
-/// The settings of one bar widget, if it has any.
-fn widget_field(kind: WidgetKind) -> Option<Field<crate::bar::config::ModulesConfig>> {
+/// The settings of one bar widget, if it has any; keyed by the widget's
+/// config name, which is also its `[bar.modules.<key>]` table.
+fn widget_field(widget: &BarWidgetMeta) -> Option<Field<crate::bar::config::ModulesConfig>> {
     type M = crate::bar::config::ModulesConfig;
-    let label = kind.label();
-    let field = match kind {
-        WidgetKind::Clock => {
-            Field::nested("clock", label, |m: &M| &m.clock, |m: &mut M| &mut m.clock)
-        }
-        WidgetKind::Battery => Field::nested(
+    let label = widget.label;
+    let field = match widget.name {
+        "Clock" => Field::nested("clock", label, |m: &M| &m.clock, |m: &mut M| &mut m.clock),
+        "Battery" => Field::nested(
             "battery",
             label,
             |m: &M| &m.battery,
             |m: &mut M| &mut m.battery,
         ),
-        WidgetKind::Workspaces => Field::nested(
+        "Workspaces" => Field::nested(
             "workspaces",
             label,
             |m: &M| &m.workspaces,
             |m: &mut M| &mut m.workspaces,
         ),
-        WidgetKind::Tray => Field::nested("tray", label, |m: &M| &m.tray, |m: &mut M| &mut m.tray),
-        WidgetKind::SysInfo => Field::nested(
+        "Systray" => Field::nested("tray", label, |m: &M| &m.tray, |m: &mut M| &mut m.tray),
+        "SysInfo" => Field::nested(
             "sysinfo",
             label,
             |m: &M| &m.sysinfo,
             |m: &mut M| &mut m.sysinfo,
         ),
-        WidgetKind::Mpris => {
-            Field::nested("mpris", label, |m: &M| &m.mpris, |m: &mut M| &mut m.mpris)
-        }
-        WidgetKind::ActiveWindow => Field::nested(
+        "Mpris" => Field::nested("mpris", label, |m: &M| &m.mpris, |m: &mut M| &mut m.mpris),
+        "ActiveWindow" => Field::nested(
             "active_window",
             label,
             |m: &M| &m.active_window,
             |m: &mut M| &mut m.active_window,
         ),
-        WidgetKind::KeyboardLayout => Field::nested(
+        "KeyboardLayout" => Field::nested(
             "keyboard_layout",
             label,
             |m: &M| &m.keyboard_layout,
             |m: &mut M| &mut m.keyboard_layout,
         ),
-        WidgetKind::LauncherBtn | WidgetKind::Notification | WidgetKind::Settings => return None,
+        _ => return None,
     };
-    Some(field.icon(kind.icon()).describe(kind.description()))
+    Some(field.icon(widget.icon).describe(widget.description))
 }
 
 impl Editable for crate::bar::config::ModulesConfig {
@@ -327,10 +406,7 @@ impl Editable for crate::bar::config::ModulesConfig {
     }
 
     fn fields() -> Vec<Field<Self>> {
-        WidgetKind::ALL
-            .into_iter()
-            .filter_map(widget_field)
-            .collect()
+        bar_widgets::widgets().filter_map(widget_field).collect()
     }
 }
 
@@ -388,9 +464,10 @@ impl Editable for TrayConfig {
 
     fn fields() -> Vec<Field<Self>> {
         vec![
-            Field::number("icon_size", "Icon size", lens!(icon_size as f64))
+            Field::number("icon_size", "Icon size", lens!(icon_size or 16.0))
                 .range(8.0, 48.0)
-                .unit("px"),
+                .unit("px")
+                .describe("Unset, tray icons match the bar's other icons. Reset to default to follow them again"),
         ]
     }
 }
@@ -511,6 +588,7 @@ impl Editable for LauncherConfig {
                     .icon(IconName::Layout)
                     .describe("Size of the launcher and its distance from the screen edges")
                     .preview(launcher_preview),
+                    opacity_field("Opacity", lens!(opacity or 1.0)),
                 ],
             ),
         ]
@@ -687,6 +765,7 @@ impl Editable for OsdConfig {
             )
             .describe("Where volume and brightness indicators appear; click an edge of the preview")
             .preview(osd_preview),
+            opacity_field("Opacity", lens!(opacity or 1.0)),
         ]
     }
 }
@@ -786,6 +865,7 @@ impl Editable for NotificationConfig {
                     )
                     .range(40.0, 600.0)
                     .unit("px"),
+                    opacity_field("Popup opacity", lens!(opacity or 1.0)),
                 ],
             ),
             Group::new(
@@ -879,6 +959,7 @@ impl Editable for DockConfig {
             Field::number("icon_size", "Icon size", lens!(icon_size as f64))
                 .range(16.0, 96.0)
                 .unit("px"),
+            opacity_field("Opacity", lens!(opacity or 1.0)),
         ]
     }
 }
@@ -896,6 +977,7 @@ impl Editable for PanelsConfig {
                 lens!(close_on_click_outside),
             )
             .describe("That click is not passed on to what is underneath"),
+            opacity_field("Opacity", lens!(opacity or 1.0)),
         ]
     }
 }
@@ -907,22 +989,45 @@ mod tests {
     /// Every key an `Editable` names must exist in the struct's TOML, or the
     /// store would write a key serde ignores.
     fn keys_resolve<S: Editable>() {
-        let table: toml::Table = toml::from_str(&toml::to_string(&S::default()).unwrap()).unwrap();
-        let keys: Vec<&str> = S::fields()
-            .iter()
-            .flat_map(|field| match &field.editor {
-                super::super::schema::Editor::Bundle(fields) => {
-                    fields.iter().map(|f| f.key).collect::<Vec<_>>()
-                }
-                _ => vec![field.key],
-            })
-            .collect();
-        for key in keys {
-            let mut node = Some(&toml::Value::Table(table.clone()));
+        use super::super::schema::Editor;
+
+        fn has_key(section: &impl serde::Serialize, key: &str) -> bool {
+            let table: toml::Table =
+                toml::from_str(&toml::to_string(section).unwrap()).unwrap();
+            let mut node = Some(&toml::Value::Table(table));
             for segment in key.split('.') {
                 node = node.and_then(|v| v.get(segment));
             }
-            assert!(node.is_some(), "{}: key {:?} missing", S::title(), key);
+            node.is_some()
+        }
+
+        let fields: Vec<_> = S::fields()
+            .iter()
+            .flat_map(|field| match &field.editor {
+                Editor::Bundle(fields) => fields.to_vec(),
+                _ => vec![field.clone()],
+            })
+            .collect();
+        for field in fields {
+            // A custom page writes its own keys; `key` only names the row.
+            if matches!(field.editor, Editor::Custom { .. }) {
+                continue;
+            }
+            let mut sample = S::default();
+            // An unset `Option` has no key in the default's TOML; give it a
+            // value and the key has to appear.
+            if !has_key(&sample, field.key)
+                && let Editor::Number { lens, .. } = &field.editor
+            {
+                let shown = (lens.get)(&sample);
+                (lens.set)(&mut sample, shown);
+            }
+            assert!(
+                has_key(&sample, field.key),
+                "{}: key {:?} missing",
+                S::title(),
+                field.key
+            );
         }
     }
 
@@ -932,6 +1037,7 @@ mod tests {
         keys_resolve::<BarConfig>();
         keys_resolve::<BarFloatingConfig>();
         keys_resolve::<BarFrameConfig>();
+        keys_resolve::<BarSegmentsConfig>();
         keys_resolve::<crate::bar::config::ModulesConfig>();
         keys_resolve::<ClockConfig>();
         keys_resolve::<BatteryConfig>();

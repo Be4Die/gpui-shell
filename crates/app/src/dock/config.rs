@@ -112,6 +112,9 @@ pub struct DockConfig {
     pub hover_effect: DockHoverEffect,
     /// Icon size in px.
     pub icon_size: f32,
+    /// Opacity of the dock surface, from 0.0 to 1.0. Unset, it follows
+    /// `opacity` in `theme.toml`.
+    pub opacity: Option<f32>,
     /// Pinned app identifiers (desktop file names, e.g. `"firefox.desktop"`).
     /// Pinning from the UI writes `state.toml`, which then overrides this.
     pub pinned: Vec<String>,
@@ -125,6 +128,7 @@ impl Default for DockConfig {
             visibility: DockVisibility::default(),
             hover_effect: DockHoverEffect::default(),
             icon_size: 40.0,
+            opacity: None,
             pinned: Vec::new(),
         }
     }

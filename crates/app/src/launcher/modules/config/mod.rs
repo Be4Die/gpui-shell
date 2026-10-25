@@ -12,6 +12,7 @@ pub mod config;
 mod dock_preview;
 mod launcher_preview;
 mod layout_page;
+mod look_page;
 mod notification_preview;
 mod osd_preview;
 mod preview;

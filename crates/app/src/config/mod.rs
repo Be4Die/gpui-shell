@@ -94,7 +94,7 @@ impl Config {
             }
         };
 
-        cx.set_global(theme);
+        Theme::set(theme, cx);
         cx.set_global(config);
         State::init(cx);
         ConfigSignals::init(cx);

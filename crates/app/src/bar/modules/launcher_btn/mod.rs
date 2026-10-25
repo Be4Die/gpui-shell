@@ -5,10 +5,23 @@ pub use config::LauncherBtnConfig;
 
 use crate::launcher;
 use gpui::{AnyElement, Context, Window, prelude::*};
-use ui::{ButtonCommon, ButtonLike, ButtonStyle, Clickable, Color, Icon, IconName, IconSource};
+use ui::{ButtonCommon, ButtonLike, ButtonStyle, Clickable, IconName};
 
-use super::{BarWidget, style};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, boxed, style};
 use crate::config::ActiveConfig;
+
+pub const fn descriptor() -> BarWidgetDescriptor {
+    BarWidgetDescriptor::new(
+        BarWidgetMeta {
+            name: "LauncherBtn",
+            aliases: &["Launcher"],
+            label: "Launcher button",
+            description: "Opens the command launcher.",
+            icon: IconName::MagnifyingGlass,
+        },
+        |cx| boxed(cx, LauncherBtn::new),
+    )
+}
 
 /// A button widget that opens the launcher when clicked.
 pub struct LauncherBtn;
@@ -21,12 +34,10 @@ impl LauncherBtn {
         LauncherBtn
     }
 
-    fn render_button_content(
-        &self,
-        icon: IconSource,
-        is_vertical: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render(&self, ctx: &BarCtx, cx: &mut Context<Self>) -> AnyElement {
+        let config = &cx.config().bar.modules.launcher_btn;
+        let icon = crate::icons::source_or(config.icon.as_ref(), LAUNCHER_ICON);
+
         // The chip around this button already paints the hover and owns the
         // padding, so the button itself stays transparent and unpadded.
         ButtonLike::new("launcher-btn")
@@ -34,11 +45,7 @@ impl LauncherBtn {
             .on_click(cx.listener(move |_, _, _, cx| {
                 launcher::toggle(None, cx);
             }))
-            .child(
-                Icon::new(icon)
-                    .size(style::icon(is_vertical))
-                    .color(Color::Default),
-            )
+            .child(style::icon(ctx, icon))
             .into_any_element()
     }
 }
@@ -48,21 +55,21 @@ impl BarWidget for LauncherBtn {
         true
     }
 
-    fn render_vertical(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let config = &cx.config().bar.modules.launcher_btn;
-        let icon = crate::icons::source_or(config.icon.as_ref(), LAUNCHER_ICON);
-        self.render_button_content(icon, true, cx)
+    fn render_vertical(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render(ctx, cx)
     }
 
-    fn render_horizontal(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let config = &cx.config().bar.modules.launcher_btn;
-        let icon = crate::icons::source_or(config.icon.as_ref(), LAUNCHER_ICON);
-        self.render_button_content(icon, false, cx)
-    }
-}
-
-impl Render for LauncherBtn {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_bar_widget(window, cx)
+    fn render_horizontal(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render(ctx, cx)
     }
 }

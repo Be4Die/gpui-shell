@@ -796,7 +796,11 @@ impl Render for Showcase {
                                     .h(px(68.0))
                                     .rounded(Radius::Small.pixels()),
                             )
-                            .child(gpui::img(demo_image_path()).size(px(56.0)).rounded_full()),
+                            .child(
+                                gpui::img(demo_image_path())
+                                    .size(px(56.0))
+                                    .rounded(Radius::Full.pixels()),
+                            ),
                     )
                     .child({
                         use gpui::StyledImage as _;

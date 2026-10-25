@@ -12,7 +12,7 @@ use super::section_page::{
     file_actions, form_heading, header_card, unsaved_banner, watch_revision,
 };
 use crate::bar::config::{BarConfig, BarItem};
-use crate::bar::modules::WidgetKind;
+use crate::bar::modules::{self as widgets, BarWidgetMeta};
 use crate::launcher::action::{Action, ActionPanel, Outcome};
 use crate::launcher::content::{Accessory, Content, Detail, EmptyView, Item, List, Section};
 use crate::launcher::page::{LauncherPage, Page};
@@ -92,8 +92,8 @@ fn item_label(item: &BarItem) -> String {
     item.names()
         .iter()
         .map(|name| {
-            WidgetKind::parse(name)
-                .map(|kind| kind.label().to_string())
+            widgets::find(name)
+                .map(|widget| widget.meta.label.to_string())
                 .unwrap_or_else(|| name.clone())
         })
         .collect::<Vec<_>>()
@@ -102,8 +102,8 @@ fn item_label(item: &BarItem) -> String {
 
 fn item_icon(item: &BarItem) -> IconName {
     match item {
-        BarItem::Widget(name) => WidgetKind::parse(name)
-            .map(WidgetKind::icon)
+        BarItem::Widget(name) => widgets::find(name)
+            .map(|widget| widget.meta.icon)
             .unwrap_or(IconName::Hash),
         BarItem::Group(_) => IconName::Layers,
     }
@@ -115,7 +115,7 @@ impl LayoutPage {
         let unknown = item
             .names()
             .iter()
-            .any(|name| WidgetKind::parse(name).is_none());
+            .any(|name| widgets::find(name).is_none());
         let mut row = Item::new(
             format!("{}:{ix}:{}", slot.key(), item.names().join("+")),
             item_label(item),
@@ -266,17 +266,17 @@ fn layout_form(path: &ConfigPath<BarConfig>, cx: &App) -> AnyElement {
         for (ix, item) in items.iter().enumerate() {
             block = block.child(layout_row(path, slot, ix, item, items.len()));
         }
-        let adds = WidgetKind::ALL.into_iter().map(|kind| {
+        let adds = widgets::widgets().map(|kind| {
             let path = path.clone();
             IconButton::new(
-                SharedString::from(format!("add-{}-{}", slot.key(), kind.name())),
-                kind.icon(),
+                SharedString::from(format!("add-{}-{}", slot.key(), kind.name)),
+                kind.icon,
             )
             .icon_size(IconSize::Small)
             .style(ButtonStyle::Ghost)
             .tooltip(Tooltip::text(format!(
                 "Add {}",
-                kind.label().to_lowercase()
+                kind.label.to_lowercase()
             )))
             .on_click(move |_, _, cx| {
                 edit_slots(
@@ -284,7 +284,7 @@ fn layout_form(path: &ConfigPath<BarConfig>, cx: &App) -> AnyElement {
                     &[slot],
                     |bar| {
                         slot.items_mut(bar)
-                            .push(BarItem::Widget(kind.name().into()))
+                            .push(BarItem::Widget(kind.name.into()))
                     },
                     cx,
                 );
@@ -508,19 +508,19 @@ impl AddWidgetPage {
 impl LauncherPage for AddWidgetPage {
     fn content(&mut self, _query: &str, cx: &mut Context<Self>) -> Content {
         let bar = self.path.read(cx);
-        let placed: Vec<WidgetKind> = Slot::ALL
+        let placed: Vec<&BarWidgetMeta> = Slot::ALL
             .iter()
             .flat_map(|slot| slot.items(bar).iter())
             .flat_map(|item| item.names().iter())
-            .filter_map(|name| WidgetKind::parse(name))
+            .filter_map(|name| widgets::find(name).map(|widget| &widget.meta))
             .collect();
         let slot = self.slot;
-        let items = WidgetKind::ALL.into_iter().map(|kind| {
+        let items = widgets::widgets().map(|kind| {
             let path = self.path.clone();
-            let mut item = Item::new(kind.name(), kind.label())
-                .subtitle(kind.description())
-                .icon(kind.icon())
-                .keywords(kind.name())
+            let mut item = Item::new(kind.name, kind.label)
+                .subtitle(kind.description)
+                .icon(kind.icon)
+                .keywords(kind.name)
                 .actions(file_actions(ActionPanel::new().action(Action::new(
                     "Add",
                     move |_, cx| {
@@ -529,7 +529,7 @@ impl LauncherPage for AddWidgetPage {
                             &[slot],
                             |bar| {
                                 slot.items_mut(bar)
-                                    .push(BarItem::Widget(kind.name().into()))
+                                    .push(BarItem::Widget(kind.name.into()))
                             },
                             cx,
                         );

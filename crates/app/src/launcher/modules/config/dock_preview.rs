@@ -3,7 +3,7 @@
 //! visibility mode hides it. Clicking an edge moves the dock there.
 
 use gpui::{AnyElement, App, BoxShadow, Div, Pixels, div, point, prelude::*, px};
-use ui::{ActiveTheme, Radius};
+use ui::{ActiveTheme, Fade, Opacity, Radius};
 
 use super::bar_preview::bar_zone;
 use super::preview::{frame, hit_zones, scale, screen, set_field};
@@ -16,7 +16,7 @@ const EDGE_GAP: f32 = 3.;
 /// How far a lifted icon rises; a quarter of the real 8px lift is invisible.
 const LIFT: f32 = 3.;
 /// A hidden dock shows faintly so the edge it would appear on stays legible.
-const HIDDEN_OPACITY: f32 = 0.45;
+const HIDDEN_OPACITY: Opacity = Opacity::Muted;
 const ICONS: usize = 5;
 /// The icon drawn under the cursor.
 const HOVERED: usize = 2;
@@ -38,7 +38,7 @@ pub fn dock_preview(path: &ConfigPath<DockConfig>, cx: &App) -> AnyElement {
             .flex_none()
             .rounded(Radius::Full.pixels())
             .size(icon)
-            .bg(colors.accent.opacity(if hovered { 1. } else { 0.7 }));
+            .bg(if hovered { colors.accent } else { colors.accent.fade(Opacity::Soft) });
         if hovered {
             let effect = dock.hover_effect;
             if matches!(
@@ -57,7 +57,7 @@ pub fn dock_preview(path: &ConfigPath<DockConfig>, cx: &App) -> AnyElement {
             }
             if effect == DockHoverEffect::Glow {
                 dot = dot.shadow(vec![BoxShadow {
-                    color: colors.accent.opacity(0.7),
+                    color: colors.accent.fade(Opacity::Soft),
                     offset: point(px(0.), px(0.)),
                     blur_radius: px(4.),
                     spread_radius: px(1.5),
@@ -90,7 +90,7 @@ pub fn dock_preview(path: &ConfigPath<DockConfig>, cx: &App) -> AnyElement {
         px(EDGE_GAP),
     )
     .when(dock.visibility != DockVisibility::AlwaysVisible, |layer| {
-        layer.opacity(HIDDEN_OPACITY)
+        layer.opacity(HIDDEN_OPACITY.value())
     })
     .child(strip);
     screen = screen.child(dock_layer);

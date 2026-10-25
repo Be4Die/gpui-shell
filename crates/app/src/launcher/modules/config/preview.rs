@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use gpui::{AnyElement, App, Div, Pixels, SharedString, div, prelude::*, px};
 use serde::Serialize;
-use ui::{ActiveTheme, Color, Label, LabelCommon, Radius, Spacing, TextSize};
+use ui::{ActiveTheme, Color, Fade, Label, LabelCommon, Opacity, Radius, Spacing, TextSize};
 
 use super::schema::{ConfigPath, to_value};
 
@@ -133,7 +133,7 @@ where
             .cursor_pointer()
             .map(|hit| zone.place(hit))
             .when(position != current, |hit| {
-                hit.hover(move |s| s.bg(colors.accent.opacity(0.18)))
+                hit.hover(move |s| s.bg(colors.accent.fade(Opacity::Faint)))
             })
             .on_click(move |_, _, cx| set(position, cx));
         screen = screen.child(hit);

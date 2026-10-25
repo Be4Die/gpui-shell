@@ -3,14 +3,29 @@
 mod config;
 pub use config::ActiveWindowConfig;
 
-use gpui::{AnyElement, Context, Render, Window, div, prelude::*, px};
+use gpui::{AnyElement, Context, Window, div, prelude::*};
 use services::CompositorState;
+use ui::{IconName, LabelCommon};
 
-use super::{BarWidget, BarWidgetShell, style};
+use super::{
+    BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style,
+};
 use crate::config::ActiveConfig;
 use crate::state::AppState;
 use crate::state::watch;
-use ui::{ActiveTheme, Color, Icon, IconName, LabelCommon, h_flex, v_flex};
+
+pub const fn descriptor() -> BarWidgetDescriptor {
+    BarWidgetDescriptor::new(
+        BarWidgetMeta {
+            name: "ActiveWindow",
+            aliases: &["WindowTitle"],
+            label: "Active window",
+            description: "Title of the focused window.",
+            icon: IconName::Layout,
+        },
+        |cx| boxed(cx, ActiveWindow::new),
+    )
+}
 
 /// Widget that displays the currently focused window's title.
 pub struct ActiveWindow {
@@ -21,13 +36,14 @@ pub struct ActiveWindow {
 impl ActiveWindow {
     const VERTICAL_LINE_WIDTH: usize = 3;
     const VERTICAL_MAX_LINES: usize = 5;
+    /// Characters a vertical stack keeps before it marks the overflow.
+    const VERTICAL_MAX_CHARS: usize = 15;
 
     /// Create a new active window widget.
     pub fn new(cx: &mut Context<Self>) -> Self {
         let compositor = AppState::compositor(cx).clone();
         let state = compositor.get();
 
-        // Subscribe to compositor state changes
         watch(cx, compositor.subscribe(), |this, new_state, cx| {
             this.state = new_state;
             cx.notify();
@@ -52,22 +68,15 @@ impl ActiveWindow {
         window.class.trim()
     }
 
-    /// Get the display title, truncated if necessary.
-    fn display_title(&self, max_length: usize) -> String {
-        let title = self.window_text();
-        if title.is_empty() {
-            return String::new();
-        }
-
-        if max_length == 0 {
-            return title.to_string();
-        }
-
-        if let Some((cutoff, _)) = title.char_indices().nth(max_length) {
-            format!("{}…", &title[..cutoff])
+    /// The title cut at a word boundary: at `max_length` characters from the
+    /// config, or at what the bar's title width holds when that is 0.
+    fn display_title(&self, max_length: usize, fit: usize) -> String {
+        let limit = if max_length == 0 {
+            fit
         } else {
-            title.to_string()
-        }
+            max_length.min(fit)
+        };
+        style::fit_words(self.window_text(), limit)
     }
 
     /// Substring to icon, in match order.
@@ -226,59 +235,49 @@ impl BarWidget for ActiveWindow {
         }
     }
 
-    fn render_vertical(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+    fn render_vertical(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
         if !self.has_window_content() {
             return div().id("active-window").into_any_element();
         }
 
-        let vertical_lines = self.vertical_lines(15);
-        let text_color = theme.colors.text;
-
-        v_flex()
+        style::stack(ctx)
             .id("active-window")
-            .items_center()
-            .gap(px(1.0))
-            .children(vertical_lines.into_iter().map(move |line| {
-                style::vertical_text_line(style::bar_label(line, true, text_color))
-            }))
+            .gap(ctx.metrics.line_gap)
+            .children(
+                self.vertical_lines(Self::VERTICAL_MAX_CHARS)
+                    .into_iter()
+                    .map(|line| style::text_line(ctx, style::label(ctx, line))),
+            )
             .into_any_element()
     }
 
-    fn render_horizontal(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+    fn render_horizontal(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         if !self.has_window_content() {
             return div().id("active-window").into_any_element();
         }
 
         let config = &cx.config().bar.modules.active_window;
-        let title = self.display_title(config.max_length);
-        let icon = if config.show_app_icon {
-            self.window_icon()
-        } else {
-            None
-        };
+        let title = self.display_title(config.max_length, ctx.metrics.title_chars);
+        let icon = config.show_app_icon.then(|| self.window_icon()).flatten();
 
-        h_flex()
+        style::stack(ctx)
             .id("active-window")
             .justify_center()
-            .gap(px(style::CHIP_GAP))
-            .max_w(px(460.0))
+            .gap(ctx.metrics.gap)
+            .max_w(ctx.metrics.title_width)
             .overflow_hidden()
-            .when_some(icon, |el, icon| {
-                el.child(
-                    Icon::new(icon)
-                        .size(style::icon(false))
-                        .color(Color::Default),
-                )
-            })
-            .child(style::bar_label(title, false, theme.colors.text).truncate())
+            .children(icon.map(|icon| style::icon(ctx, icon)))
+            .child(style::label(ctx, title).truncate())
             .into_any_element()
-    }
-}
-
-impl Render for ActiveWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_bar_widget(window, cx)
     }
 }

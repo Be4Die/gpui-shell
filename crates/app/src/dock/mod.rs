@@ -14,7 +14,8 @@ pub use window::{init, reload};
 
 use gpui::{AnyElement, App, Context, DisplayId, Render, Size, Window, div, img, prelude::*, px};
 use std::collections::HashMap;
-use ui::{ActiveTheme, Radius, Spacing, TextSize};
+use ui::patterns::surface_radius;
+use ui::{ActiveTheme, Radius, Spacing, TextSize, nested_radius};
 
 use crate::config::{ActiveConfig, ConfigSignals, State};
 use crate::state::{AppState, display_id_for_window, watch};
@@ -437,7 +438,7 @@ impl Dock {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(Radius::Medium.pixels());
+            .rounded(nested_radius(surface_radius(), Spacing::Medium.pixels()));
 
         element = match hover_effect {
             config::DockHoverEffect::None => element,
@@ -463,7 +464,7 @@ impl Dock {
                 div()
                     .flex_1()
                     .h(px(3.0))
-                    .rounded(px(1.5))
+                    .rounded(Radius::Full.pixels())
                     .bg(if window.is_focused {
                         accent
                     } else {
@@ -591,7 +592,7 @@ impl Render for Dock {
                 .into_any_element();
         }
 
-        let background = cx.theme().colors.background;
+        let background = cx.theme().surface(cx.config().dock.opacity);
         let border = cx.theme().colors.border_variant;
         let is_vertical = position.is_vertical();
         if window.viewport_size() != dock_size {
@@ -611,7 +612,7 @@ impl Render for Dock {
             .gap(Spacing::Medium.pixels())
             .px(Spacing::Medium.pixels())
             .py(Spacing::Medium.pixels())
-            .rounded(Radius::Large.pixels())
+            .rounded(surface_radius())
             .bg(background)
             .border_1()
             .border_color(border)
@@ -631,7 +632,7 @@ impl Render for Dock {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(Radius::Medium.pixels())
+                    .rounded(nested_radius(surface_radius(), Spacing::Medium.pixels()))
                     .cursor_pointer()
                     .text_color(cx.theme().colors.text_muted)
                     .hover(|style| style.text_color(cx.theme().colors.text))

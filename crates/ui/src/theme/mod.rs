@@ -1,6 +1,6 @@
 //! The theme system.
 
-use gpui::{App, Global, Pixels, SharedString, px};
+use gpui::{App, Global, Hsla, Pixels, SharedString, px};
 use serde::{Deserialize, Serialize};
 
 mod base16;
@@ -16,7 +16,9 @@ pub use base16::{Base16Palette, WallpaperPalettes};
 pub use colors::{Color, StatusColors, ThemeColors};
 pub use refinement::{StatusColorsRefinement, ThemeColorsRefinement};
 pub use schemes::{ThemeScheme, builtin_schemes};
-pub use tokens::{IconSize, Radius, Spacing, TextSize};
+pub use tokens::{
+    Fade, IconSize, Opacity, Radius, Spacing, TextSize, inset_radius, nested_radius, radius_scale,
+};
 
 /// Whether a theme is a light or a dark variant.
 ///
@@ -55,6 +57,10 @@ pub struct Theme {
     pub overrides: ThemeColorsRefinement,
     /// Base font size.
     pub font_size: Pixels,
+    /// Multiplier on every [`Radius`]: `0` square, `1` the token values.
+    pub radius_scale: f32,
+    /// Shell-wide surface opacity, `0.0..=1.0`; see [`surface`](Self::surface).
+    pub opacity: f32,
 }
 
 impl Global for Theme {}
@@ -63,6 +69,8 @@ impl Theme {
     /// Default base font size, matching what the shell shipped before sizes
     /// became configurable tokens.
     pub const DEFAULT_FONT_SIZE: Pixels = px(13.0);
+    pub const DEFAULT_RADIUS_SCALE: f32 = 1.0;
+    pub const DEFAULT_OPACITY: f32 = 1.0;
 
     /// Build a theme from a palette, with no overrides.
     pub fn from_palette(name: impl Into<SharedString>, palette: Base16Palette) -> Self {
@@ -73,7 +81,31 @@ impl Theme {
             palette,
             overrides: ThemeColorsRefinement::default(),
             font_size: Self::DEFAULT_FONT_SIZE,
+            radius_scale: Self::DEFAULT_RADIUS_SCALE,
+            opacity: Self::DEFAULT_OPACITY,
         }
+    }
+
+    /// The fill of a shell surface (bar, panel, launcher, OSD, popup, dock):
+    /// the theme background at `opacity`, or at the theme's own opacity when
+    /// a surface sets none. The one place the `0.0..=1.0` clamp lives.
+    pub fn surface(&self, opacity: Option<f32>) -> Hsla {
+        self.colors
+            .background
+            .opacity(self.surface_opacity(opacity))
+    }
+
+    /// The opacity [`surface`](Self::surface) would use.
+    pub fn surface_opacity(&self, opacity: Option<f32>) -> f32 {
+        opacity.unwrap_or(self.opacity).clamp(0.0, 1.0)
+    }
+
+    pub fn set_radius_scale(&mut self, scale: f32) {
+        self.radius_scale = scale.clamp(0.0, Radius::MAX_SCALE);
+    }
+
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(0.0, 1.0);
     }
 
     /// The resolved semantic tokens.
@@ -110,7 +142,7 @@ impl Theme {
 
     /// Initialize the global theme. Call once at startup.
     pub fn init(cx: &mut App) {
-        cx.set_global(Theme::default());
+        Theme::set(Theme::default(), cx);
     }
 
     /// Borrow the global theme.
@@ -125,9 +157,14 @@ impl Theme {
         cx.global_mut::<Theme>()
     }
 
-    /// Replace the global theme.
+    /// Replace the global theme. The only way to install one: it also hands
+    /// the radius scale to the tokens, which read it without a context, and
+    /// repaints every window - the bar and dock would otherwise keep the old
+    /// look until something else dirtied them.
     pub fn set(theme: Theme, cx: &mut App) {
-        *cx.global_mut::<Theme>() = theme;
+        tokens::set_radius_scale(theme.radius_scale);
+        cx.set_global(theme);
+        cx.refresh_windows();
     }
 }
 
@@ -158,6 +195,11 @@ impl ActiveTheme for App {
 pub struct StoredTheme {
     pub name: String,
     pub font_size: f32,
+    /// Corner radius multiplier: `0.0` square everywhere, `1.0` the default.
+    pub radius_scale: f32,
+    /// Surface opacity for the bar, panels, launcher, OSD, popups and dock,
+    /// `0.0..=1.0`. Each surface can override it in `config.toml`.
+    pub opacity: f32,
     pub base16: Base16Palette,
     #[serde(skip_serializing_if = "ThemeColorsRefinement::is_empty")]
     pub colors: ThemeColorsRefinement,
@@ -174,6 +216,8 @@ impl StoredTheme {
         Self {
             name: theme.name.to_string(),
             font_size: theme.font_size.into(),
+            radius_scale: theme.radius_scale,
+            opacity: theme.opacity,
             base16: theme.palette,
             colors: theme.overrides,
         }
@@ -182,6 +226,8 @@ impl StoredTheme {
     pub fn into_theme(self) -> Theme {
         let mut theme = Theme::from_palette(self.name, self.base16);
         theme.font_size = px(self.font_size);
+        theme.set_radius_scale(self.radius_scale);
+        theme.set_opacity(self.opacity);
         theme.set_overrides(self.colors);
         theme
     }
@@ -264,5 +310,44 @@ mod tests {
         };
         theme.set_palette("Other", Base16Palette::default());
         assert_eq!(theme.font_size, px(18.0));
+    }
+
+    /// Like the font size, the corner style and opacity are the user's, not
+    /// the scheme's: a palette swap keeps them, and so does a save.
+    #[test]
+    fn radius_scale_and_opacity_survive_a_palette_swap_and_a_round_trip() {
+        let mut theme = Theme::default();
+        theme.set_radius_scale(0.0);
+        theme.set_opacity(0.8);
+        theme.set_palette("Other", Base16Palette::default());
+        assert_eq!(theme.radius_scale, 0.0);
+        assert_eq!(theme.opacity, 0.8);
+
+        let encoded = toml::to_string_pretty(&StoredTheme::from_theme(&theme)).unwrap();
+        let restored: StoredTheme = toml::from_str(&encoded).unwrap();
+        let restored = restored.into_theme();
+        assert_eq!(restored.radius_scale, 0.0);
+        assert_eq!(restored.opacity, 0.8);
+    }
+
+    /// A `theme.toml` written before these keys existed keeps today's look.
+    #[test]
+    fn a_theme_file_without_the_new_keys_gets_the_defaults() {
+        let theme: StoredTheme = toml::from_str("name = \"Old\"\nfont_size = 13.0\n").unwrap();
+        let theme = theme.into_theme();
+        assert_eq!(theme.radius_scale, Theme::DEFAULT_RADIUS_SCALE);
+        assert_eq!(theme.opacity, Theme::DEFAULT_OPACITY);
+    }
+
+    #[test]
+    fn surface_clamps_once_and_prefers_the_override() {
+        let mut theme = Theme::default();
+        theme.set_opacity(0.5);
+        assert_eq!(theme.surface(None).a, theme.colors.background.a * 0.5);
+        assert_eq!(theme.surface_opacity(Some(0.25)), 0.25);
+        assert_eq!(theme.surface_opacity(Some(7.0)), 1.0);
+        assert_eq!(theme.surface_opacity(Some(-1.0)), 0.0);
+        theme.set_opacity(3.0);
+        assert_eq!(theme.opacity, 1.0);
     }
 }

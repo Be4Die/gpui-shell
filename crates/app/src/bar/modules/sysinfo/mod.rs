@@ -2,18 +2,31 @@
 //!
 //! Clicking the widget opens the launcher's system info module.
 
-use gpui::{AnyElement, Context, Window, prelude::*, px};
+use gpui::{AnyElement, Context, Hsla, Window, prelude::*};
 use services::SysInfoData;
-use ui::{ActiveTheme, ButtonCommon, ButtonLike, ButtonStyle, Clickable, IconName};
+use ui::{ButtonCommon, ButtonLike, ButtonStyle, Clickable, IconName};
 
 mod config;
 pub use config::SysInfoConfig;
 
-use super::{BarWidget, style};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, boxed, style};
 use crate::config::ActiveConfig;
 use crate::launcher;
 use crate::state::AppState;
 use crate::state::watch;
+
+pub const fn descriptor() -> BarWidgetDescriptor {
+    BarWidgetDescriptor::new(
+        BarWidgetMeta {
+            name: "SysInfo",
+            aliases: &[],
+            label: "System info",
+            description: "CPU, memory and temperature readouts.",
+            icon: IconName::Cpu,
+        },
+        |cx| boxed(cx, SysInfo::new),
+    )
+}
 
 /// SysInfo widget showing CPU and memory usage in the bar.
 pub struct SysInfo {
@@ -23,7 +36,7 @@ pub struct SysInfo {
 struct SysInfoStat {
     icon: IconName,
     text: String,
-    color: gpui::Hsla,
+    color: Hsla,
 }
 
 impl SysInfo {
@@ -56,24 +69,23 @@ impl SysInfo {
         }
     }
 
-    fn usage_text(usage: u32, is_vertical: bool) -> String {
-        style::compact_percent(usage, is_vertical)
-    }
-
-    fn stats(
-        &self,
-        theme: &ui::Theme,
-        config: &SysInfoConfig,
-        is_vertical: bool,
-    ) -> Vec<SysInfoStat> {
+    fn stats(&self, ctx: &BarCtx, config: &SysInfoConfig) -> Vec<SysInfoStat> {
         let mut stats = Vec::new();
+
+        // Neutral until a reading deserves attention, like the battery.
+        let usage_ink = |usage: u32| {
+            ctx.ink
+                .status
+                .usage_attention(usage)
+                .unwrap_or(ctx.ink.text)
+        };
 
         if config.show_cpu {
             let cpu_usage = self.data.cpu_usage;
             stats.push(SysInfoStat {
                 icon: self.cpu_icon(),
-                text: Self::usage_text(cpu_usage, is_vertical),
-                color: theme.colors.status.from_percentage(cpu_usage),
+                text: style::compact_percent(ctx, cpu_usage),
+                color: usage_ink(cpu_usage),
             });
         }
 
@@ -81,8 +93,8 @@ impl SysInfo {
             let memory_usage = self.data.memory_usage;
             stats.push(SysInfoStat {
                 icon: self.memory_icon(),
-                text: Self::usage_text(memory_usage, is_vertical),
-                color: theme.colors.status.from_percentage(memory_usage),
+                text: style::compact_percent(ctx, memory_usage),
+                color: usage_ink(memory_usage),
             });
         }
 
@@ -95,24 +107,25 @@ impl SysInfo {
                 } else {
                     IconName::Thermometer
                 },
-                text: if is_vertical {
+                text: if ctx.vertical {
                     temp.to_string()
                 } else {
                     format!("{temp}°C")
                 },
-                color: theme.colors.status.from_temperature(temp),
+                color: ctx
+                    .ink
+                    .status
+                    .temperature_attention(temp)
+                    .unwrap_or(ctx.ink.text),
             });
         }
 
         stats
     }
 
-    fn render_stats(
-        &mut self,
-        cx: &mut Context<Self>,
-        stats: Vec<SysInfoStat>,
-        is_vertical: bool,
-    ) -> AnyElement {
+    fn render(&self, ctx: &BarCtx, cx: &mut Context<Self>) -> AnyElement {
+        let stats = self.stats(ctx, &cx.config().bar.modules.sysinfo);
+
         ButtonLike::new("sysinfo-widget")
             .style(ButtonStyle::Transparent)
             .on_click(cx.listener(|_, _, _, cx| {
@@ -120,12 +133,14 @@ impl SysInfo {
                 launcher::toggle(Some(prefix), cx);
             }))
             .child(
-                style::stack(is_vertical)
+                style::stack(ctx)
                     .justify_center()
-                    .gap(px(style::CHIP_GAP))
-                    .children(stats.into_iter().map(|stat| {
-                        style::bar_stat(is_vertical, stat.icon, stat.text, stat.color)
-                    })),
+                    .gap(ctx.metrics.gap)
+                    .children(
+                        stats
+                            .into_iter()
+                            .map(|stat| style::stat(ctx, stat.icon, stat.text, stat.color)),
+                    ),
             )
             .into_any_element()
     }
@@ -136,21 +151,21 @@ impl BarWidget for SysInfo {
         true
     }
 
-    fn render_vertical(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let config = &cx.config().bar.modules.sysinfo;
-        let stats = self.stats(cx.theme(), config, true);
-        self.render_stats(cx, stats, true)
+    fn render_vertical(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render(ctx, cx)
     }
 
-    fn render_horizontal(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let config = &cx.config().bar.modules.sysinfo;
-        let stats = self.stats(cx.theme(), config, false);
-        self.render_stats(cx, stats, false)
-    }
-}
-
-impl Render for SysInfo {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_bar_widget(window, cx)
+    fn render_horizontal(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render(ctx, cx)
     }
 }

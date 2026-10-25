@@ -6,6 +6,7 @@ use gpui::{AnyElement, App, Context, FontWeight, ObjectFit, Window, div, img, pr
 use services::{
     MprisCommand, MprisData, MprisPlayerData, MprisSubscriber, PlaybackStatus, PlayerCommand,
 };
+use crate::windows::ShellPanel;
 use ui::patterns::PanelSurface;
 use ui::{
     ActiveTheme, ButtonCommon, ButtonSize, ButtonStyle, Clickable, Color, Icon, IconButton,
@@ -283,7 +284,7 @@ impl Render for MprisPanel {
             .w_full()
             .h_full()
             .p(Spacing::XLarge.pixels())
-            .panel_surface(cx)
+            .shell_panel(cx)
             .overflow_hidden()
             .child(
                 v_flex()

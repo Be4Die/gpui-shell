@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use gpui::{App, ImageSource, IntoElement, div, prelude::*, px, relative};
 
-use crate::{ActiveTheme, Color, Label, LabelCommon, Spacing, TextSize, h_flex};
+use crate::{ActiveTheme, Color, Label, LabelCommon, Radius, Spacing, TextSize, h_flex};
 
 /// `http(s)` sources are fetched through the app's HTTP client; anything
 /// else is a path, with `~/` expanded.
@@ -47,13 +47,13 @@ pub fn track_progress(position_us: i64, duration_us: i64, cx: &App) -> impl Into
             div()
                 .flex_1()
                 .h(px(3.))
-                .rounded_full()
+                .rounded(Radius::Full.pixels())
                 .bg(colors.element_background)
                 .overflow_hidden()
                 .child(
                     div()
                         .h_full()
-                        .rounded_full()
+                        .rounded(Radius::Full.pixels())
                         .bg(colors.accent)
                         .w(relative(fraction)),
                 ),

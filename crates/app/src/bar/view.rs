@@ -9,10 +9,10 @@ use gpui::{
     WindowBounds, WindowKind, WindowOptions, layer_shell::*, point, prelude::*, px,
 };
 use ui::ActiveTheme;
-use ui::patterns::{BarBubble, BarShape, BarSurface};
+use ui::patterns::{BarSegment, BarShape, BarSurface};
 
 use super::config::{BarItem, BarPosition, BarStyle};
-use super::modules::Widget;
+use super::modules::{self, BarCtx, Widget};
 use crate::config::{ActiveConfig, ConfigSignals};
 use crate::state::watch;
 
@@ -24,37 +24,48 @@ struct Section {
 }
 
 impl Section {
-    fn new(items: &[BarItem], cx: &mut Context<Bar>) -> Self {
+    fn new(items: &[BarItem], ctx: &BarCtx, cx: &mut Context<Bar>) -> Self {
         Self {
             items: items.to_vec(),
             groups: items
                 .iter()
-                .map(|item| Widget::create_many(item.names(), cx))
+                .map(|item| modules::build_many(item.names(), ctx, cx))
                 .filter(|group| !group.is_empty())
                 .collect(),
         }
     }
 
     /// Rebuild only when the list changed, so untouched widgets keep their state.
-    fn sync(&mut self, items: &[BarItem], cx: &mut Context<Bar>) {
+    fn sync(&mut self, items: &[BarItem], ctx: &BarCtx, cx: &mut Context<Bar>) {
         if self.items != items {
-            *self = Self::new(items, cx);
+            *self = Self::new(items, ctx, cx);
         }
     }
 
-    fn render(&self, bubble: Option<&dyn Fn() -> BarBubble>) -> Vec<AnyElement> {
-        match bubble {
-            Some(bubble) => self
-                .groups
-                .iter()
-                .map(|group| {
-                    bubble()
-                        .children(group.iter().map(Widget::render))
-                        .into_any_element()
-                })
-                .collect(),
-            None => self.groups.iter().flatten().map(Widget::render).collect(),
+    /// Hand every widget its current placement.
+    fn place(&self, ctx: &BarCtx, cx: &mut Context<Bar>) {
+        for widget in self.groups.iter().flatten() {
+            widget.set_ctx(ctx, cx);
         }
+    }
+
+    /// One segment per entry, in every style; the style only decides what
+    /// the segment paints.
+    fn render(&self, ctx: &BarCtx) -> Vec<AnyElement> {
+        let segment = ctx.segment;
+        self.groups
+            .iter()
+            .map(|group| {
+                BarSegment::new(ctx.vertical)
+                    .fill(segment.fill)
+                    .border(segment.border)
+                    .radius(segment.radius)
+                    .thickness(Some(segment.thickness))
+                    .padding(segment.padding)
+                    .children(group.iter().map(Widget::render))
+                    .into_any_element()
+            })
+            .collect()
     }
 }
 
@@ -70,19 +81,21 @@ impl Bar {
     /// Create a bar with configuration.
     fn new(cx: &mut Context<Self>) -> Self {
         let config = cx.config().bar.clone();
+        let ctx = BarCtx::new(&config, cx.theme());
         let bar = ConfigSignals::global(cx).bar.signal_cloned();
         watch(cx, bar, |this, bar, cx| {
-            this.start.sync(&bar.start, cx);
-            this.center.sync(&bar.center, cx);
-            this.end.sync(&bar.end, cx);
+            let ctx = BarCtx::new(&bar, cx.theme());
+            this.start.sync(&bar.start, &ctx, cx);
+            this.center.sync(&bar.center, &ctx, cx);
+            this.end.sync(&bar.end, &ctx, cx);
             cx.notify();
         });
 
         Self {
             position: config.position,
-            start: Section::new(&config.start, cx),
-            center: Section::new(&config.center, cx),
-            end: Section::new(&config.end, cx),
+            start: Section::new(&config.start, &ctx, cx),
+            center: Section::new(&config.center, &ctx, cx),
+            end: Section::new(&config.end, &ctx, cx),
         }
     }
 }
@@ -90,35 +103,41 @@ impl Bar {
 impl Render for Bar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(cx.theme().font_size);
+
+        // Config and theme changes both land here, so this is where every
+        // widget learns about its new placement.
+        let ctx = BarCtx::new(&cx.config().bar, cx.theme());
+        for section in [&self.start, &self.center, &self.end] {
+            section.place(&ctx, cx);
+        }
+
         let bar = &cx.config().bar;
         let shape = match bar.style {
             BarStyle::Attached | BarStyle::Bubbles => BarShape::Attached,
             BarStyle::Floating => BarShape::Floating {
-                radius: px(bar.floating.radius),
+                radius: bar.floating.radius(),
             },
             BarStyle::Frame => BarShape::Framed,
         };
 
-        let theme = cx.theme();
-        let fill = bar.background_color(theme);
-        let vertical = bar.is_vertical();
-        let border = bar.show_border.then_some(theme.colors().border);
-        let bubble = || BarBubble::new(vertical, fill).border(border);
-        // With bubbles the fill and border move onto the pills.
-        let bubble = (bar.style == BarStyle::Bubbles).then_some(&bubble as &dyn Fn() -> BarBubble);
+        // With bubbles the fill and border move onto the segments.
+        let bubbles = bar.style == BarStyle::Bubbles;
+        let fill = if bubbles {
+            gpui::transparent_black()
+        } else {
+            bar.background_color(cx.theme())
+        };
 
         BarSurface::new(self.position.edge())
             .shape(shape)
-            .background(if bubble.is_some() {
-                gpui::transparent_black()
-            } else {
-                fill
-            })
-            .border(bar.show_border && bubble.is_none())
-            .padding(px(bar.padding))
-            .start(self.start.render(bubble))
-            .center(self.center.render(bubble))
-            .end(self.end.render(bubble))
+            .background(fill)
+            .border(bar.show_border && !bubbles)
+            .padding(ctx.end_padding)
+            .inset(ctx.segment.inset)
+            .segment_gap(ctx.segment.gap)
+            .start(self.start.render(&ctx))
+            .center(self.center.render(&ctx))
+            .end(self.end.render(&ctx))
     }
 }
 

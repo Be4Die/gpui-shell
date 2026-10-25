@@ -8,7 +8,7 @@ use gpui::{
     Styled, Window, div, prelude::*, relative,
 };
 
-use crate::theme::{ActiveTheme, Color};
+use crate::theme::{ActiveTheme, Color, Fade, Opacity, Radius};
 
 use super::button_like::{
     ButtonCommon, ButtonLike, ButtonLikeRounding, ButtonSize, ButtonStyle, SelectableButton,
@@ -228,7 +228,7 @@ impl<T: ButtonBuilder, const N: usize> ToggleButtonGroup<T, N> {
 impl<T: ButtonBuilder, const N: usize> RenderOnce for ToggleButtonGroup<T, N> {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let colors = cx.theme().colors();
-        let border_color = colors.border.opacity(0.6);
+        let border_color = colors.border.fade(Opacity::Soft);
         let is_outlined = self.style == ToggleButtonGroupStyle::Outlined;
         let is_filled = self.style == ToggleButtonGroupStyle::Filled;
         let is_transparent = self.style == ToggleButtonGroupStyle::Transparent;
@@ -319,7 +319,7 @@ impl<T: ButtonBuilder, const N: usize> RenderOnce for ToggleButtonGroup<T, N> {
                     this.w_full()
                 }
             })
-            .rounded_md()
+            .rounded(Radius::Medium.pixels())
             .overflow_hidden()
             .when(is_filled, |this| this.bg(colors.element_background))
             .when(is_outlined, |this| {

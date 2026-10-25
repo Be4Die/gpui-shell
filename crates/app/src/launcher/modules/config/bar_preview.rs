@@ -12,9 +12,12 @@ use crate::bar::config::{BarConfig, BarPosition, BarStyle};
 
 pub fn bar_preview(path: &ConfigPath<BarConfig>, cx: &App) -> AnyElement {
     let bar = path.read(cx).clone();
-    let colors = cx.theme().colors();
+    let theme = cx.theme();
+    let colors = theme.colors();
     // Below 0.4 the strip would vanish into the screen.
-    let bar_color = colors.accent.opacity(bar.background.clamp(0.4, 1.0));
+    let bar_color = colors
+        .accent
+        .opacity(theme.surface_opacity(bar.opacity).max(0.4));
     let thickness = scale(bar.size, 4., 18.);
     let gap = scale(bar.floating.gap, 0., 24.);
     let frame_width = scale(bar.frame.thickness, 2., 10.);
@@ -23,13 +26,13 @@ pub fn bar_preview(path: &ConfigPath<BarConfig>, cx: &App) -> AnyElement {
     screen = match bar.style {
         BarStyle::Attached => screen.child(bar_strip(&bar, thickness, px(0.), px(0.), bar_color)),
         BarStyle::Floating => {
-            let radius = scale(bar.floating.radius, 0., 12.);
+            let radius = scale(f32::from(bar.floating.radius()), 0., 12.);
             screen.child(bar_strip(&bar, thickness, gap, radius, bar_color))
         }
         BarStyle::Bubbles => screen.child(bubbles(&bar, thickness, bar_color)),
         // The frame is the screen itself; the content shows as a hole.
         BarStyle::Frame => {
-            let radius = scale(bar.frame.radius, 0., 12.);
+            let radius = scale(f32::from(bar.frame.radius()), 0., 12.);
             let f = frame_width;
             let hole = div()
                 .absolute()

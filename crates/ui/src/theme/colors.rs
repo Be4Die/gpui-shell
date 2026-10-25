@@ -116,6 +116,27 @@ impl StatusColors {
             self.success
         }
     }
+
+    /// The attention colour a usage percentage earns, if any: warning from
+    /// 70, error from 90, nothing below. For readouts that should stay
+    /// neutral until something is actually wrong.
+    pub fn usage_attention(&self, value: u32) -> Option<Hsla> {
+        match value {
+            90.. => Some(self.error),
+            70.. => Some(self.warning),
+            _ => None,
+        }
+    }
+
+    /// [`usage_attention`](Self::usage_attention) for a temperature in
+    /// degrees Celsius: warning from 70, error from 85.
+    pub fn temperature_attention(&self, temp: i32) -> Option<Hsla> {
+        match temp {
+            85.. => Some(self.error),
+            70.. => Some(self.warning),
+            _ => None,
+        }
+    }
 }
 
 /// The semantic color palette powering every component.

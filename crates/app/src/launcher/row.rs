@@ -12,8 +12,11 @@ use gpui::{
 use ui::{
     ActiveTheme, Color, HighlightedLabel, Icon, IconSize, Label, LabelCommon, ListItem,
     ListItemSpacing, Radius, Spacing, TextSize, ThumbnailCache, ThumbnailKey, Toggleable,
+    inset_radius,
     thumbnail,
 };
+
+use ui::patterns::card_radius;
 
 use super::action::Action;
 use super::content::{Accessory, AccessoryKind, Dropdown, EmptyView, Item, ItemIcon, Section};
@@ -98,7 +101,7 @@ pub(super) fn list_row(
                 div()
                     .size(ICON_SLOT)
                     .flex_none()
-                    .rounded(px(6.))
+                    .rounded(card_radius())
                     .overflow_hidden()
                     .child(icon),
             )
@@ -168,7 +171,7 @@ pub(super) fn grid_cell(
     div()
         .size_full()
         .p(Spacing::XSmall.pixels())
-        .rounded(Radius::Medium.pixels())
+        .rounded(card_radius())
         .border_1()
         .border_color(if selected {
             colors.accent
@@ -185,7 +188,7 @@ pub(super) fn grid_cell(
             div()
                 .w_full()
                 .h(content.height)
-                .rounded(Radius::Small.pixels())
+                .rounded(inset_radius(card_radius(), Spacing::XSmall.pixels()))
                 .overflow_hidden()
                 .bg(colors.element_background)
                 .children(icon_content(
@@ -288,7 +291,7 @@ pub(super) fn dropdown_chips(
             .gap(Spacing::XSmall.pixels())
             .px(Spacing::Medium.pixels())
             .py(px(3.))
-            .rounded_full()
+            .rounded(Radius::Full.pixels())
             .border_1()
             .cursor_pointer()
             .text_size(TextSize::XSmall.rems())
@@ -349,7 +352,7 @@ pub(super) fn dropdown_button(action: &Action, cx: &App) -> Stateful<Div> {
         .gap(Spacing::XSmall.pixels())
         .px(Spacing::Medium.pixels())
         .py(px(3.))
-        .rounded_full()
+        .rounded(Radius::Full.pixels())
         .border_1()
         .border_color(colors.border_variant)
         .bg(colors.element_background)

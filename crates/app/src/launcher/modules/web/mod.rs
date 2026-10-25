@@ -121,7 +121,7 @@ impl Render for WebSearchModule {
                                         div()
                                             .px(px(6.))
                                             .py(px(2.))
-                                            .rounded(px(4.))
+                                            .rounded(Radius::Small.pixels())
                                             .bg(interactive_default)
                                             .child(
                                                 Label::new(format!("!{}", provider.shebang))
@@ -152,7 +152,7 @@ impl Render for WebSearchModule {
                                         div()
                                             .px(px(4.))
                                             .py(px(2.))
-                                            .rounded(px(3.))
+                                            .rounded(Radius::Small.pixels())
                                             .bg(rgba(0x00000044))
                                             .child(
                                                 Label::new("Enter")

@@ -1016,7 +1016,7 @@ impl Launcher {
                         div()
                             .px(px(4.))
                             .py(px(1.))
-                            .rounded(px(3.))
+                            .rounded(Radius::Small.pixels())
                             .bg(colors.element_background)
                             .child(
                                 Label::new(shortcut)
@@ -1204,6 +1204,7 @@ impl Render for Launcher {
             .relative()
             .child(
                 LauncherFrame::new(render_input_line(&self.input, &self.placeholder(), cx))
+                    .background(cx.theme().surface(Config::global(cx).launcher.opacity))
                     .badge(badge)
                     .loading(loading)
                     .hints(self.footer_left())

@@ -117,13 +117,13 @@ impl RenderOnce for Avatar {
         let initial: SharedString = initial_of(&name).into();
         div()
             .size(diameter)
-            .rounded_full()
+            .rounded(Radius::Full.pixels())
             .bg(bg)
             .flex()
             .items_center()
             .justify_center()
             .when_some(image, |this, source| {
-                this.child(img(source).size(diameter).rounded_full().bg(bg))
+                this.child(img(source).size(diameter).rounded(Radius::Full.pixels()).bg(bg))
             })
             .when(!has_image, |this| {
                 this.child(

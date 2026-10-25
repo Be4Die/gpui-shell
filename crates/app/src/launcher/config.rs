@@ -19,6 +19,9 @@ pub struct LauncherConfig {
     pub margin_right: f32,
     pub margin_bottom: f32,
     pub margin_left: f32,
+    /// Opacity of the launcher surface, from 0.0 to 1.0. Unset, it follows
+    /// `opacity` in `theme.toml`.
+    pub opacity: Option<f32>,
     /// Per-module settings, `[launcher.modules.<id>]`.
     #[serde(alias = "views")]
     pub modules: ModulesConfig,
@@ -33,6 +36,7 @@ impl Default for LauncherConfig {
             margin_right: 0.0,
             margin_bottom: 0.0,
             margin_left: 0.0,
+            opacity: None,
             modules: ModulesConfig::default(),
         }
     }

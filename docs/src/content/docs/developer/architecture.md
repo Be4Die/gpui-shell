@@ -77,8 +77,8 @@ Windows are matched to compositor monitors by output name
 
 ## Adding things
 
-- **Bar module:** a directory in `app/src/bar/modules/`, registered in
-  `modules/registry.rs`.
+- **Bar module:** a directory in `app/src/bar/modules/` exposing a
+  `BarWidgetDescriptor`, listed once in `modules/mod.rs`.
 - **Launcher module:** a directory in `app/src/launcher/modules/` implementing
   `LauncherPage`, registered in `modules/mod.rs`.
 - **Service:** a module in `services/src/` implementing `ManagedService`,

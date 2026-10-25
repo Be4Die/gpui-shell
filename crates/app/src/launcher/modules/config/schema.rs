@@ -59,6 +59,9 @@ pub fn to_value<T: Serialize + ?Sized>(value: &T) -> toml_edit::Value {
 pub struct Lens<S, T> {
     pub get: fn(&S) -> T,
     pub set: fn(&mut S, T),
+    /// Put the struct default back, which for an `Option` is `None`, not
+    /// the number the editor shows for it.
+    pub reset: fn(&mut S),
     pub to_toml: fn(&S) -> toml_edit::Value,
 }
 
@@ -71,20 +74,36 @@ impl<S, T> Clone for Lens<S, T> {
 impl<S, T> Copy for Lens<S, T> {}
 
 /// `lens!(field)` or `lens!(outer.inner)`; `lens!(field as f64)` for numeric
-/// fields, which the editor handles as `f64` but writes with their own type.
-/// Expands inside an `impl Editable`, where `Self` is the struct.
+/// fields, which the editor handles as `f64` but writes with their own type;
+/// `lens!(field or 1.0)` for an `Option` number that shows as `1.0` while
+/// unset and goes back to unset on reset. Expands inside an `impl Editable`,
+/// where `Self` is the struct.
 macro_rules! lens {
     ($($field:ident).+ as f64) => {
         $crate::launcher::modules::config::schema::Lens {
             get: |s: &Self| s.$($field).+ as f64,
             set: |s: &mut Self, v: f64| s.$($field).+ = v as _,
+            reset: |s: &mut Self| s.$($field).+ = Self::default().$($field).+,
             to_toml: |s: &Self| $crate::launcher::modules::config::schema::to_value(&s.$($field).+),
+        }
+    };
+    ($($field:ident).+ or $unset:expr) => {
+        $crate::launcher::modules::config::schema::Lens {
+            get: |s: &Self| s.$($field).+.map_or($unset, |v| v as f64),
+            set: |s: &mut Self, v: f64| s.$($field).+ = Some(v as _),
+            reset: |s: &mut Self| s.$($field).+ = None,
+            to_toml: |s: &Self| {
+                $crate::launcher::modules::config::schema::to_value(
+                    &s.$($field).+.map_or($unset, |v| v as f64),
+                )
+            },
         }
     };
     ($($field:ident).+) => {
         $crate::launcher::modules::config::schema::Lens {
             get: |s: &Self| s.$($field).+.clone(),
             set: |s: &mut Self, v| s.$($field).+ = v,
+            reset: |s: &mut Self| s.$($field).+ = Self::default().$($field).+,
             to_toml: |s: &Self| $crate::launcher::modules::config::schema::to_value(&s.$($field).+),
         }
     };
@@ -558,13 +577,12 @@ impl<S: Editable> Field<S> {
 
     /// Put the default back in memory; the store drops the key.
     pub fn reset(&self, section: &mut S) {
-        let default = S::default();
         match &self.editor {
-            Editor::Toggle(lens) => (lens.set)(section, (lens.get)(&default)),
-            Editor::Number { lens, .. } => (lens.set)(section, (lens.get)(&default)),
-            Editor::Text { lens, .. } => (lens.set)(section, (lens.get)(&default)),
+            Editor::Toggle(lens) => (lens.reset)(section),
+            Editor::Number { lens, .. } => (lens.reset)(section),
+            Editor::Text { lens, .. } => (lens.reset)(section),
             Editor::Choice { current, options } => {
-                if let Some(option) = options.get(current(&default)) {
+                if let Some(option) = options.get(current(&S::default())) {
                     (option.apply)(section);
                 }
             }
@@ -711,6 +729,15 @@ impl<S: 'static> ConfigPath<S> {
         }
     }
 
+    /// Replace the whole section in memory and record that `keys` should be
+    /// dropped from the file, so its default applies again.
+    pub fn remove_raw(&self, keys: Vec<&'static str>, section: S, cx: &mut App) {
+        let get_mut = self.get_mut.clone();
+        store::apply(cx, Edit::Remove(keys), move |config| {
+            *get_mut(config) = section;
+        });
+    }
+
     /// Replace the whole section in memory and record one key's value.
     pub fn set_raw(
         &self,
@@ -749,6 +776,26 @@ mod tests {
         let bar = root.then("bar", |c: &Config| &c.bar, |c: &mut Config| &mut c.bar);
         assert_eq!(bar.keys_for("size"), vec!["bar", "size"]);
         assert_eq!(bar.key_string("modules.clock"), "bar.modules.clock");
+    }
+
+    /// An optional number shows its stand-in while unset, is not "modified"
+    /// then, and goes back to unset - not to the stand-in - on reset.
+    #[test]
+    fn an_optional_number_resets_to_unset() {
+        let opacity = crate::bar::config::BarConfig::fields()
+            .into_iter()
+            .find(|field| field.key == "opacity")
+            .unwrap();
+        let mut bar = crate::bar::config::BarConfig::default();
+        assert!(!opacity.is_modified(&bar));
+        assert_eq!(opacity.display(&bar), "1");
+
+        bar.opacity = Some(0.5);
+        assert!(opacity.is_modified(&bar));
+        assert_eq!(opacity.display(&bar), "0.5");
+
+        opacity.reset(&mut bar);
+        assert_eq!(bar.opacity, None);
     }
 
     #[test]

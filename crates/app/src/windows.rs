@@ -13,6 +13,7 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 use ui::ActiveTheme;
+use ui::patterns::PanelSurface;
 
 use crate::config::BarPosition;
 use crate::launcher::Launcher;
@@ -24,13 +25,29 @@ pub struct PanelsConfig {
     /// Close the open panel when you click anywhere outside it. That click
     /// is not passed on to what is underneath.
     pub close_on_click_outside: bool,
+    /// Opacity of every panel's surface (control center, notification
+    /// center, tray menus, media panel), from 0.0 to 1.0. Unset, it follows
+    /// `opacity` in `theme.toml`.
+    pub opacity: Option<f32>,
 }
 
 impl Default for PanelsConfig {
     fn default() -> Self {
         Self {
             close_on_click_outside: true,
+            opacity: None,
         }
+    }
+}
+
+/// The fill every panel paints with: the theme surface at `[panels] opacity`.
+pub trait ShellPanel: Styled + Sized {
+    fn shell_panel(self, cx: &App) -> Self;
+}
+
+impl<T: Styled> ShellPanel for T {
+    fn shell_panel(self, cx: &App) -> Self {
+        self.panel_surface_with(crate::config::Config::global(cx).panels.opacity, cx)
     }
 }
 
@@ -99,6 +116,16 @@ pub fn panel_placement_from_event(
             let bounds = window.bounds();
             (bounds, bounds)
         });
+    // The panel keeps the bar's own gap from the bar and the screen edges,
+    // so it reads as part of the same layout rather than stuck to a corner.
+    let gap = px(crate::config::Config::global(cx).bar.panel_gap());
+    let usable_bounds = Bounds {
+        origin: point(usable_bounds.origin.x + gap, usable_bounds.origin.y + gap),
+        size: size(
+            (usable_bounds.size.width - gap * 2.).max(px(0.)),
+            (usable_bounds.size.height - gap * 2.).max(px(0.)),
+        ),
+    };
     let click = point(
         window.bounds().origin.x + position.x,
         window.bounds().origin.y + position.y,

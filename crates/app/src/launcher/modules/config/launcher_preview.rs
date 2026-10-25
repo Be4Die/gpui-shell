@@ -2,7 +2,7 @@
 //! like the real layer-shell surface, sized and pushed in by the live config.
 
 use gpui::{AnyElement, App, div, prelude::*, px};
-use ui::{ActiveTheme, Radius};
+use ui::{ActiveTheme, Fade, Opacity, Radius};
 
 use super::preview::{frame, scale_to_display, screen};
 use super::schema::ConfigPath;
@@ -17,12 +17,12 @@ pub fn launcher_preview(path: &ConfigPath<LauncherConfig>, cx: &App) -> AnyEleme
     let margin = |value: f32| scale_to_display(value, 0., 100., cx);
     let header = px((f32::from(height) * 0.2).clamp(4., 8.));
 
-    let line = |width: f32, opacity: f32| {
+    let line = |width: f32, opacity: Option<Opacity>| {
         div()
             .h(px(2.))
             .w(px(width))
             .rounded(Radius::Full.pixels())
-            .bg(colors.border.opacity(opacity))
+            .bg(opacity.map_or(colors.border, |opacity| colors.border.fade(opacity)))
     };
     let window = div()
         .flex_none()
@@ -43,7 +43,7 @@ pub fn launcher_preview(path: &ConfigPath<LauncherConfig>, cx: &App) -> AnyEleme
                 .h(header)
                 .border_b_1()
                 .border_color(colors.border)
-                .child(line(f32::from(width) * 0.3, 1.)),
+                .child(line(f32::from(width) * 0.3, None)),
         )
         .child(
             div()
@@ -52,8 +52,8 @@ pub fn launcher_preview(path: &ConfigPath<LauncherConfig>, cx: &App) -> AnyEleme
                 .gap(px(3.))
                 .px(px(4.))
                 .py(px(3.))
-                .child(line(f32::from(width) * 0.5, 0.6))
-                .child(line(f32::from(width) * 0.4, 0.6)),
+                .child(line(f32::from(width) * 0.5, Some(Opacity::Soft)))
+                .child(line(f32::from(width) * 0.4, Some(Opacity::Soft))),
         );
 
     // The margins shrink the area the window is centred in, top first.

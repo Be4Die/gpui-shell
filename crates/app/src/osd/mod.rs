@@ -19,7 +19,7 @@ use gpui::{
     prelude::*, px,
 };
 use ui::patterns::OsdIndicator;
-use ui::{ActiveTheme, IconName};
+use ui::{ActiveTheme, IconName, Spacing};
 
 use crate::config::Config;
 use crate::icons;
@@ -109,11 +109,12 @@ impl Render for OsdView {
             theme.colors.text
         };
 
-        // 8px inset all round is what the window's long/short extent leaves
+        // The inset all round is what the window's long/short extent leaves
         // the pill.
-        div().size_full().p(px(8.0)).child(
+        div().size_full().p(Spacing::Medium.pixels()).child(
             OsdIndicator::new(icon, level)
                 .vertical(self.position.is_vertical())
+                .background(theme.surface(Config::global(cx).osd.opacity))
                 .fill(fill)
                 .icon_color(icon_color),
         )

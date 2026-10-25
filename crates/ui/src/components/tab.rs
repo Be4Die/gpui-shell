@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::theme::{ActiveTheme, Color, Spacing};
+use crate::theme::{ActiveTheme, Color, Radius, Spacing};
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, IntoElement, ParentElement, RenderOnce, SharedString,
     Window, div, prelude::*, px,
@@ -130,7 +130,7 @@ impl RenderOnce for Tab {
                         .ml(px(4.0))
                         .cursor_pointer()
                         .hover(|s| s.bg(colors.ghost_element_active))
-                        .rounded(px(2.0))
+                        .rounded(Radius::XSmall.pixels())
                         .child(
                             Icon::new(IconName::Close)
                                 .size(IconSize::XSmall)

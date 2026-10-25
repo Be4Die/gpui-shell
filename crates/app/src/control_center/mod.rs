@@ -34,6 +34,7 @@ use gpui::{
 };
 use services::{ChargeLimit, UPowerCommand};
 use ui::patterns::PanelSurface;
+use crate::windows::ShellPanel;
 use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize};
 
 use crate::config::ActiveConfig;
@@ -216,7 +217,7 @@ impl Render for ControlCenter {
             .key_context("ControlCenter")
             .w_full()
             .p(Spacing::Large.pixels())
-            .panel_surface(cx)
+            .shell_panel(cx)
             .text_color(theme.colors.text)
             .flex()
             .flex_col()
@@ -330,7 +331,7 @@ impl Render for ControlCenter {
                             .id("config-button")
                             .w(px(36.))
                             .h(px(36.))
-                            .rounded(px(18.))
+                            .rounded(Radius::Full.pixels())
                             .flex()
                             .items_center()
                             .justify_center()
@@ -353,7 +354,7 @@ impl Render for ControlCenter {
                             .id("power-button")
                             .w(px(36.))
                             .h(px(36.))
-                            .rounded(px(18.))
+                            .rounded(Radius::Full.pixels())
                             .flex()
                             .items_center()
                             .justify_center()

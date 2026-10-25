@@ -3,7 +3,7 @@
 //! right. Clicking a corner moves the popups there.
 
 use gpui::{AnyElement, App, Div, div, prelude::*, px};
-use ui::{ActiveTheme, Radius};
+use ui::{ActiveTheme, Fade, Opacity, Radius};
 
 use super::preview::{Zone, frame, hit_zones, scale, screen, set_field};
 use super::schema::ConfigPath;
@@ -128,6 +128,6 @@ fn center_panel(config: &NotificationConfig, cx: &App) -> Div {
         .h(scale(config.center_height, 40., 116.))
         .rounded(Radius::Small.pixels())
         .border_1()
-        .border_color(colors.border.opacity(0.6))
-        .bg(colors.element_background.opacity(0.35))
+        .border_color(colors.border.fade(Opacity::Soft))
+        .bg(colors.element_background.fade(Opacity::Subtle))
 }

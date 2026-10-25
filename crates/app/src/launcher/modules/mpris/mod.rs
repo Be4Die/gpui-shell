@@ -300,7 +300,7 @@ impl MprisModule {
                     .p(Spacing::Medium.pixels())
                     .gap(Spacing::Medium.pixels())
                     .bg(theme.colors.surface_background)
-                    .rounded(px(8.))
+                    .rounded(Radius::Large.pixels())
                     .child(cover)
                     .child(text),
             )

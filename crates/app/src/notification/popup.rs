@@ -12,8 +12,8 @@ use gpui::{
     layer_shell::*, point, prelude::*, px, size,
 };
 use services::{Notification, NotificationCommand, NotificationSubscriber};
-use ui::patterns::PanelSurface;
-use ui::{ActiveTheme, Color, Icon, IconSize, Radius, Spacing};
+use ui::patterns::{PanelSurface, surface_radius};
+use ui::{ActiveTheme, Color, Icon, IconSize, Spacing};
 
 use crate::config::ActiveConfig;
 use crate::state::AppState;
@@ -80,7 +80,7 @@ impl NotificationPopupStack {
             .relative()
             .w_full()
             .overflow_hidden()
-            .panel_surface(cx)
+            .panel_surface_with(config.opacity, cx)
             .p(Spacing::Medium.pixels())
             .when(!compact, |el| el.border_color(theme.colors.accent))
             .when(is_critical(notification), |el| {
@@ -133,7 +133,7 @@ impl NotificationPopupStack {
             .border_1()
             .border_t_0()
             .border_color(theme.colors.border)
-            .rounded_b(Radius::Large.pixels())
+            .rounded_b(surface_radius())
             .into_any_element()
     }
 

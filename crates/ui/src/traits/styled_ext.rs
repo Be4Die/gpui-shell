@@ -1,6 +1,6 @@
 //! [`StyledExt`] - layout and elevation shorthands on top of [`gpui::Styled`].
 
-use crate::theme::ActiveTheme;
+use crate::theme::{ActiveTheme, Radius};
 use gpui::{App, Styled};
 
 use crate::styles::ElevationIndex;
@@ -8,7 +8,7 @@ use crate::styles::ElevationIndex;
 fn elevated<E: Styled>(this: E, cx: &App, index: ElevationIndex) -> E {
     let colors = cx.theme().colors();
     this.bg(colors.elevated_surface_background)
-        .rounded_lg()
+        .rounded(Radius::Large.pixels())
         .border_1()
         .border_color(colors.border_variant)
         .shadow(index.shadow(cx))

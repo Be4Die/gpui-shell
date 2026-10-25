@@ -4,6 +4,7 @@
 //! palette and registry status load off the UI thread; so does fetching a
 //! provider.
 
+mod appearance;
 pub mod config;
 mod registry;
 
@@ -401,14 +402,19 @@ fn hex_palette(p: &services::Base16Palette) -> Result<Base16Palette, ()> {
 }
 
 /// Make `palette` the theme and save it to `theme.toml`, keeping the user's
-/// font size and token overrides.
+/// font size, radius scale, opacity and token overrides.
 pub(crate) fn apply_palette(name: SharedString, palette: Base16Palette, cx: &mut App) {
     let mut theme = cx.theme().clone();
     theme.set_palette(name, palette);
+    apply_theme(theme, cx);
+}
+
+/// Install `theme` and save it to `theme.toml`.
+pub(crate) fn apply_theme(theme: Theme, cx: &mut App) {
     Theme::set(theme.clone(), cx);
     cx.background_spawn(async move {
         if let Err(err) = Config::save_theme_value(&theme) {
-            tracing::warn!("Failed to persist selected theme: {err}");
+            tracing::warn!("Failed to persist theme: {err}");
         }
     })
     .detach();
@@ -447,6 +453,11 @@ impl LauncherPage for ThemeModule {
             .placeholder("Search themes...")
             .dropdown(dropdown)
             .empty(self.empty_view());
+        // The non-colour knobs sit above the schemes; a source filter is
+        // about palettes, so they step aside for it.
+        if self.filter == Filter::All {
+            list = list.section(Section::new("Appearance").items(appearance::items(cx)));
+        }
         for source in Source::ALL.into_iter().filter(|s| self.filter.accepts(*s)) {
             let items: Vec<Item> = self
                 .entries
@@ -579,7 +590,7 @@ fn render_current_card(theme: &Theme, current: Option<&Entry>) -> AnyElement {
         div()
             .flex()
             .gap(px(2.))
-            .children(colors.map(|color| div().size(px(11.)).rounded(px(2.)).bg(color)))
+            .children(colors.map(|color| div().size(px(11.)).rounded(Radius::XSmall.pixels()).bg(color)))
     };
 
     div()
@@ -751,7 +762,7 @@ fn preview_tile(p: &Base16Palette, (width, height): (Pixels, Pixels)) -> impl In
                 .flex()
                 .items_center()
                 .pl(px(3.))
-                .child(div().size(line).rounded_full().bg(p.base08)),
+                .child(div().size(line).rounded(Radius::Full.pixels()).bg(p.base08)),
         )
         .child(
             div()
@@ -761,12 +772,12 @@ fn preview_tile(p: &Base16Palette, (width, height): (Pixels, Pixels)) -> impl In
                 .flex_col()
                 .justify_center()
                 .gap(line)
-                .child(div().h(line).w(width * 0.55).rounded_full().bg(p.base05))
-                .child(div().h(line).w(width * 0.35).rounded_full().bg(p.base03))
+                .child(div().h(line).w(width * 0.55).rounded(Radius::Full.pixels()).bg(p.base05))
+                .child(div().h(line).w(width * 0.35).rounded(Radius::Full.pixels()).bg(p.base03))
                 .child(
                     div().flex().gap(px(2.)).children(
                         [p.base0d, p.base0b, p.base0a, p.base0e]
-                            .map(|color| div().size(dot).rounded_full().bg(color)),
+                            .map(|color| div().size(dot).rounded(Radius::Full.pixels()).bg(color)),
                     ),
                 ),
         )
@@ -776,7 +787,7 @@ fn swatches(colors: impl IntoIterator<Item = Hsla>, size: Pixels) -> impl IntoEl
     div().flex().items_center().gap(px(2.)).children(
         colors
             .into_iter()
-            .map(move |color| div().size(size).rounded(px(3.)).bg(color)),
+            .map(move |color| div().size(size).rounded(Radius::Small.pixels()).bg(color)),
     )
 }
 

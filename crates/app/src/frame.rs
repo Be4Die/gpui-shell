@@ -88,7 +88,7 @@ impl Render for Frame {
             let theme = cx.theme();
             ScreenFrame::new(edge, px(bar.size), bar.background_color(theme))
                 .thickness(px(bar.frame.thickness.max(0.)))
-                .radius(px(bar.frame.radius.max(0.)))
+                .radius(bar.frame.radius())
                 .border(bar.show_border.then_some(theme.colors().border))
         });
 

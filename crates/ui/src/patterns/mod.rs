@@ -13,8 +13,8 @@ pub mod launcher;
 pub mod osd;
 pub mod surface;
 
-pub use bar::{BarBubble, BarChip, BarEdge, BarShape, BarSurface};
+pub use bar::{BarChip, BarEdge, BarRhythm, BarSegment, BarShape, BarSurface, ChipGeometry};
 pub use frame::ScreenFrame;
 pub use launcher::{LauncherFrame, footer_hints};
 pub use osd::OsdIndicator;
-pub use surface::PanelSurface;
+pub use surface::{PanelSurface, card_radius, surface_padding, surface_radius};
