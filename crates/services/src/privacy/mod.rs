@@ -3,13 +3,15 @@
 //! This module provides a reactive subscriber for tracking media stream access
 //! via PipeWire and webcam device usage via inotify.
 
+use std::cell::RefCell;
 use std::fs;
 use std::path::Path;
-use std::thread;
+use std::rc::Rc;
 
 use futures_signals::signal::{Mutable, MutableSignalCloned};
+use futures_util::StreamExt;
 use inotify::{EventMask, Inotify, WatchMask};
-use tracing::{debug, error, warn};
+use tracing::{debug, warn};
 
 use crate::lifecycle::{Lifecycle, ManagedService, RunToken};
 
@@ -25,7 +27,7 @@ pub enum Media {
 }
 
 /// An application node accessing media via PipeWire.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplicationNode {
     /// PipeWire node ID.
     pub id: u32,
@@ -34,7 +36,7 @@ pub struct ApplicationNode {
 }
 
 /// Privacy-related data.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrivacyData {
     /// Active PipeWire media stream nodes.
     pub nodes: Vec<ApplicationNode>,
@@ -109,40 +111,68 @@ impl ManagedService for PrivacySubscriber {
     /// service's status, and stopping silences both.
     fn start(&self) {
         let token = self.lifecycle.begin();
-        self.data.lock_mut().webcam_access = is_device_in_use(WEBCAM_DEVICE_PATH);
-        start_pipewire_listener(self.data.clone(), token.clone());
-        start_webcam_watcher(self.data.clone(), token.clone());
-        token.active();
+        let data = self.data.clone();
+        token
+            .clone()
+            .supervise_blocking("PipeWire", move |token| run_pipewire_listener(&data, token));
+        let data = self.data.clone();
+        token.supervise("Webcam watcher", move |token| {
+            run_webcam_watcher(data.clone(), token)
+        });
     }
 }
 
-/// Start the PipeWire listener thread for media stream tracking.
-///
-/// ponytail: `pipewire::MainLoopBox::run` has no cross-thread quit handle, so
-/// a stopped listener's thread lives until the process exits - it just stops
-/// publishing. Restarting privacy repeatedly leaks one idle thread per
-/// restart; wire up a `pw_loop` quit signal if that ever matters.
-fn start_pipewire_listener(data: Mutable<PrivacyData>, token: RunToken) {
-    thread::spawn(move || {
-        if let Err(e) = run_pipewire_listener(data, token.clone()) {
-            error!("PipeWire listener error: {}", e);
-            token.error(e.to_string());
+/// One PipeWire session (blocking). The loop is not async: a message on a
+/// loop-attached channel quits it when the run ends, and a core error (the
+/// daemon went away) quits it to fail the attempt.
+fn run_pipewire_listener(data: &Mutable<PrivacyData>, token: &RunToken) -> anyhow::Result<()> {
+    use pipewire::{context::ContextBox, core::PW_ID_CORE, main_loop::MainLoopRc};
+
+    let mainloop = MainLoopRc::new(None)?;
+    let (quit_tx, quit_rx) = pipewire::channel::channel::<()>();
+    let _quit = quit_rx.attach(mainloop.loop_(), {
+        let mainloop = mainloop.clone();
+        move |()| mainloop.quit()
+    });
+    // Dropped when this attempt returns, which retires the canceller with it.
+    let (_attempt, attempt_done) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn({
+        let token = token.clone();
+        async move {
+            tokio::select! {
+                _ = token.cancelled() => {
+                    let _ = quit_tx.send(());
+                }
+                _ = attempt_done => {}
+            }
         }
     });
-}
 
-/// Run the PipeWire listener (blocking).
-fn run_pipewire_listener(data: Mutable<PrivacyData>, token: RunToken) -> anyhow::Result<()> {
-    use pipewire::{context::ContextBox, main_loop::MainLoopBox};
-
-    let mainloop = MainLoopBox::new(None)?;
     let context = ContextBox::new(mainloop.loop_(), None)?;
     let core = context.connect(None)?;
+    let failure = Rc::new(RefCell::new(None::<String>));
+    let _core_listener = core
+        .add_listener_local()
+        .error({
+            let failure = failure.clone();
+            let mainloop = mainloop.clone();
+            move |id, _seq, res, message| {
+                if id == PW_ID_CORE {
+                    *failure.borrow_mut() = Some(format!("{message} ({res})"));
+                    mainloop.quit();
+                }
+            }
+        })
+        .register();
     let registry = core.get_registry()?;
+
+    // The registry replays every live node on connect.
+    token.write(data, |data| data.nodes.clear());
 
     let data_add = data.clone();
     let data_remove = data.clone();
     let token_add = token.clone();
+    let token_remove = token.clone();
 
     let _listener = registry
         .add_listener_local()
@@ -167,7 +197,7 @@ fn run_pipewire_listener(data: Mutable<PrivacyData>, token: RunToken) -> anyhow:
             }
         })
         .global_remove(move |id| {
-            if !token.alive() {
+            if !token_remove.alive() {
                 return;
             }
             let mut guard = data_remove.lock_mut();
@@ -180,33 +210,26 @@ fn run_pipewire_listener(data: Mutable<PrivacyData>, token: RunToken) -> anyhow:
         })
         .register();
 
+    token.active();
     mainloop.run();
 
-    Ok(())
+    let failure = failure.borrow_mut().take();
+    anyhow::bail!(
+        "PipeWire connection lost: {}",
+        failure.as_deref().unwrap_or("loop ended")
+    )
 }
 
-/// Start the webcam watcher thread.
-fn start_webcam_watcher(data: Mutable<PrivacyData>, token: RunToken) {
-    thread::spawn(move || {
-        if let Err(e) = run_webcam_watcher(data, token.clone()) {
-            warn!("Webcam watcher error: {}", e);
-            token.error(e.to_string());
-        }
-    });
-}
-
-/// Run the webcam watcher (blocking).
-///
-/// ponytail: `read_events_blocking` only returns on a device event, so a
-/// stopped watcher exits at the next webcam open/close rather than at once.
-fn run_webcam_watcher(data: Mutable<PrivacyData>, token: RunToken) -> anyhow::Result<()> {
+/// Run the webcam watcher. The inotify fd sits on the tokio reactor, so a
+/// stop drops the watch at once instead of at the next device event.
+async fn run_webcam_watcher(data: Mutable<PrivacyData>, token: RunToken) -> anyhow::Result<()> {
     // Check if webcam device exists
     if !Path::new(WEBCAM_DEVICE_PATH).exists() {
         warn!("Webcam device not found: {}", WEBCAM_DEVICE_PATH);
         return Ok(());
     }
 
-    let mut inotify = Inotify::init()?;
+    let inotify = Inotify::init()?;
 
     inotify.watches().add(
         WEBCAM_DEVICE_PATH,
@@ -217,31 +240,32 @@ fn run_webcam_watcher(data: Mutable<PrivacyData>, token: RunToken) -> anyhow::Re
             | WatchMask::ATTRIB,
     )?;
 
-    let mut buffer = [0; 1024];
+    let mut events = inotify.into_event_stream([0; 1024])?;
+    // Watching first, so an open between the count and the watch is not lost.
+    let in_use = tokio::task::spawn_blocking(|| is_device_in_use(WEBCAM_DEVICE_PATH)).await?;
+    data.lock_mut().webcam_access = in_use;
+    token.active();
 
-    while token.alive() {
-        let events = inotify.read_events_blocking(&mut buffer)?;
+    while let Some(event) = events.next().await {
+        let event = event?;
+        debug!("Webcam event: {:?}", event.mask);
 
-        for event in events {
-            debug!("Webcam event: {:?}", event.mask);
-
-            if event.mask.contains(EventMask::OPEN) {
-                data.lock_mut().webcam_access += 1;
-                debug!("Webcam opened: {}", data.lock_ref().webcam_access);
-            } else if event.mask.contains(EventMask::CLOSE_WRITE)
-                || event.mask.contains(EventMask::CLOSE_NOWRITE)
-            {
-                let mut guard = data.lock_mut();
-                guard.webcam_access = i32::max(guard.webcam_access - 1, 0);
-                debug!("Webcam closed: {}", guard.webcam_access);
-            } else if event.mask.contains(EventMask::DELETE_SELF) {
-                warn!("Webcam device was deleted");
-                return Ok(());
-            }
+        if event.mask.contains(EventMask::OPEN) {
+            data.lock_mut().webcam_access += 1;
+            debug!("Webcam opened: {}", data.lock_ref().webcam_access);
+        } else if event.mask.contains(EventMask::CLOSE_WRITE)
+            || event.mask.contains(EventMask::CLOSE_NOWRITE)
+        {
+            let mut guard = data.lock_mut();
+            guard.webcam_access = i32::max(guard.webcam_access - 1, 0);
+            debug!("Webcam closed: {}", guard.webcam_access);
+        } else if event.mask.contains(EventMask::DELETE_SELF) {
+            warn!("Webcam device was deleted");
+            return Ok(());
         }
     }
 
-    Ok(())
+    anyhow::bail!("webcam event stream ended")
 }
 
 /// Check how many processes have a device file open.

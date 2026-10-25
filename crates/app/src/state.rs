@@ -1,12 +1,10 @@
 //! Application-wide runtime state stored as a GPUI global.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::Instant;
 
 use futures_signals::signal::{Signal, SignalExt};
 use futures_util::StreamExt;
-use gpui::{AnyWindowHandle, App, Context, DisplayId, Global, Window};
+use gpui::{AnyWindowHandle, App, Context, DisplayId, Global, Task, Window};
 use services::{ManagedService, ServiceMode};
 
 use crate::config::State;
@@ -27,16 +25,9 @@ use crate::config::State;
 /// `PlatformDisplay::uuid()` (see the `bar` and `dock` modules'
 /// monitor-matching code), which gpui_linux derives deterministically from
 /// the Wayland output's name.
-static WINDOW_DISPLAYS: Mutex<Option<HashMap<AnyWindowHandle, DisplayId>>> = Mutex::new(None);
-
 /// Look up the display a bar window was opened on.
-pub fn display_id_for_window(window: &Window) -> Option<DisplayId> {
-    WINDOW_DISPLAYS
-        .lock()
-        .ok()?
-        .as_ref()?
-        .get(&window.window_handle())
-        .copied()
+pub fn display_id_for_window(window: &Window, cx: &App) -> Option<DisplayId> {
+    crate::windows::ShellWindows::display_for_window(cx, window)
 }
 
 /// Find the compositor monitor backing a gpui display.
@@ -45,7 +36,7 @@ pub fn display_id_for_window(window: &Window) -> Option<DisplayId> {
 /// Wayland output's name (`Uuid::new_v5(NAMESPACE_DNS, name)`), so hashing
 /// each compositor monitor name the same way identifies the pair without
 /// relying on enumeration order - which `cx.displays()` and the
-/// compositor's own list do not share (see the note on [`WINDOW_DISPLAYS`]).
+/// compositor's own list do not share (see [`display_id_for_window`]).
 pub(crate) fn monitor_for_display<'a>(
     display_id: Option<DisplayId>,
     state: &'a services::CompositorState,
@@ -83,14 +74,12 @@ pub(crate) fn logical_display_size(
     ))
 }
 
-pub(crate) fn record_window_display(handle: AnyWindowHandle, display_id: Option<DisplayId>) {
-    let Some(display_id) = display_id else {
-        return;
-    };
-    let mut guard = WINDOW_DISPLAYS.lock().unwrap();
-    guard
-        .get_or_insert_with(HashMap::new)
-        .insert(handle, display_id);
+pub(crate) fn record_window_display(
+    handle: AnyWindowHandle,
+    display_id: Option<DisplayId>,
+    cx: &mut App,
+) {
+    crate::windows::ShellWindows::record_display(cx, handle, display_id);
 }
 
 /// Shared services container for all system integrations.
@@ -104,6 +93,7 @@ pub(crate) struct Services {
     pub audio: services::AudioSubscriber,
     pub bluetooth: services::BluetoothSubscriber,
     pub brightness: services::BrightnessSubscriber,
+    pub clipboard: services::ClipboardSubscriber,
     pub compositor: services::CompositorSubscriber,
     pub mpris: services::MprisSubscriber,
     pub network: services::NetworkSubscriber,
@@ -120,7 +110,7 @@ impl Services {
     ///
     /// NOTE: keep in sync with the struct above - a new field is not added
     /// here automatically.
-    pub(crate) fn managed(&self) -> [&dyn ManagedService; 12] {
+    pub(crate) fn managed(&self) -> [&dyn ManagedService; 13] {
         [
             &self.audio,
             &self.network,
@@ -133,6 +123,7 @@ impl Services {
             &self.privacy,
             &self.wallpaper,
             &self.brightness,
+            &self.clipboard,
             &self.compositor,
         ]
     }
@@ -150,6 +141,7 @@ pub(crate) async fn init_services() -> anyhow::Result<Services> {
         audio: services::AudioSubscriber::new(),
         bluetooth: services::BluetoothSubscriber::new(),
         brightness: services::BrightnessSubscriber::new(),
+        clipboard: services::ClipboardSubscriber::new(),
         compositor,
         mpris: services::MprisSubscriber::new(),
         network: services::NetworkSubscriber::new(),
@@ -162,20 +154,37 @@ pub(crate) async fn init_services() -> anyhow::Result<Services> {
     })
 }
 
-/// Watch a signal and apply updates to component state.
+/// Watch a signal and apply distinct consecutive updates to component state.
 pub(crate) fn watch<C, S, T, F>(cx: &mut Context<C>, signal: S, on_update: F)
 where
     C: 'static,
     S: Signal<Item = T> + Unpin + 'static,
-    T: Clone + 'static,
+    T: Clone + PartialEq + 'static,
+    F: Fn(&mut C, T, &mut Context<C>) + 'static,
+{
+    watch_task(cx, signal, on_update).detach();
+}
+
+/// [`watch`] that stops when the returned task is dropped.
+pub(crate) fn watch_task<C, S, T, F>(cx: &mut Context<C>, signal: S, on_update: F) -> Task<()>
+where
+    C: 'static,
+    S: Signal<Item = T> + Unpin + 'static,
+    T: Clone + PartialEq + 'static,
     F: Fn(&mut C, T, &mut Context<C>) + 'static,
 {
     cx.spawn(async move |this, cx| {
         let mut stream = signal.to_stream();
+        let mut previous = None;
         while let Some(data) = stream.next().await {
+            if previous.as_ref() == Some(&data) {
+                continue;
+            }
+            previous = Some(data.clone());
+            let update = &on_update;
             if this
-                .update(cx, |this, cx| {
-                    on_update(this, data.clone(), cx);
+                .update(cx, move |this, cx| {
+                    update(this, data, cx);
                 })
                 .is_err()
             {
@@ -183,7 +192,6 @@ where
             }
         }
     })
-    .detach();
 }
 
 /// Global runtime state shared across views/widgets.
@@ -218,7 +226,7 @@ impl AppState {
     }
 
     /// Every service, for the launcher's services view.
-    pub fn managed_services(cx: &App) -> [&dyn ManagedService; 12] {
+    pub fn managed_services(cx: &App) -> [&dyn ManagedService; 13] {
         Self::services(cx).managed()
     }
 
@@ -255,6 +263,13 @@ impl AppState {
     #[inline(always)]
     pub fn brightness(cx: &App) -> &services::BrightnessSubscriber {
         let service = &Self::services(cx).brightness;
+        service.ensure_started();
+        service
+    }
+
+    #[inline(always)]
+    pub fn clipboard(cx: &App) -> &services::ClipboardSubscriber {
+        let service = &Self::services(cx).clipboard;
         service.ensure_started();
         service
     }

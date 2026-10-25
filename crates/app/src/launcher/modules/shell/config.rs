@@ -1,8 +1,8 @@
-//! Shell view configuration.
+//! Shell module configuration.
 
 use serde::{Deserialize, Serialize};
 
-/// Shell view configuration.
+/// Shell module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ShellConfig {

@@ -1,275 +1,113 @@
-//! Shell command view for running shell commands directly.
+//! Shell module: run the typed command in a terminal or in the background.
 
 pub mod config;
 
-use gpui::{AnyElement, App, div, prelude::*, px, rgba};
-use ui::{
-    ActiveTheme, Color, Icon, IconName, IconSize, Label, LabelCommon, Radius, Spacing, TextSize,
-};
+use std::process::Command;
+
+use gpui::Context;
+use ui::IconName;
 
 use self::config::ShellConfig;
-use ui::patterns::footer_hints;
+use crate::launcher::action::{Action, Outcome};
+use crate::launcher::content::{Content, EmptyView, Item, List};
+use crate::launcher::page::{LauncherPage, ModuleDescriptor, ModuleMeta};
 
-use crate::launcher::view::{LauncherView, ViewContext};
+const ICON: IconName = IconName::SquareTerminal;
 
-/// Shell view - executes shell commands in a terminal.
-pub struct ShellView {
-    prefix: String,
+/// Tried in order when no terminal is configured, or the configured one is
+/// missing.
+const TERMINALS: &[(&str, &[&str])] = &[
+    ("ghostty", &["-e", "sh", "-c"]),
+    ("kitty", &["--", "sh", "-c"]),
+    ("alacritty", &["-e", "sh", "-c"]),
+    ("wezterm", &["start", "--", "sh", "-c"]),
+    ("foot", &["sh", "-c"]),
+    ("gnome-terminal", &["--", "sh", "-c"]),
+    ("konsole", &["-e", "sh", "-c"]),
+    ("xfce4-terminal", &["-e", "sh", "-c"]),
+    ("xterm", &["-e", "sh", "-c"]),
+    ("x-terminal-emulator", &["-e", "sh", "-c"]),
+];
+
+pub fn descriptor(config: &ShellConfig) -> ModuleDescriptor {
+    let terminal = config.terminal.clone();
+    ModuleDescriptor::new(
+        ModuleMeta {
+            id: "shell",
+            prefix: config.prefix.clone().into(),
+            name: "Shell",
+            icon: ICON,
+            description: "Run shell commands in terminal",
+            default: false,
+            in_help: true,
+        },
+        move |_| ShellModule {
+            terminal: terminal.clone(),
+        },
+    )
+}
+
+pub struct ShellModule {
     terminal: String,
 }
 
-impl ShellView {
-    pub fn new(config: &ShellConfig) -> Self {
-        Self {
-            prefix: config.prefix.clone(),
-            terminal: config.terminal.clone(),
-        }
-    }
-}
-
-impl LauncherView for ShellView {
-    fn prefix(&self) -> &str {
-        &self.prefix
-    }
-
-    fn name(&self) -> &'static str {
-        "Shell"
-    }
-
-    fn icon(&self) -> IconName {
-        IconName::SquareTerminal
-    }
-
-    fn description(&self) -> &'static str {
-        "Run shell commands in terminal"
-    }
-
-    fn match_count(&self, vx: &ViewContext, _cx: &App) -> usize {
-        if vx.query.trim().is_empty() { 0 } else { 1 }
-    }
-
-    fn render_item(
-        &self,
-        _index: usize,
-        _selected: bool,
-        _vx: &ViewContext,
-        _cx: &App,
-    ) -> AnyElement {
-        div().into_any_element()
-    }
-
-    fn render_content(&self, vx: &ViewContext, cx: &App) -> Option<AnyElement> {
-        let theme = cx.theme();
-        let query = vx.query.trim();
-        let has_command = !query.is_empty();
-
-        let bg_secondary = theme.colors.surface_background;
-        let interactive_default = theme.colors.element_background;
-        let accent_selection = theme.colors.element_selected;
-        let interactive_hover = theme.colors.element_hover;
-        let icon = self.icon();
-
-        Some(
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap(Spacing::Large.pixels())
-                .p(Spacing::Large.pixels())
-                .child(
-                    div()
-                        .w_full()
-                        .p(Spacing::Large.pixels())
-                        .bg(bg_secondary)
-                        .rounded(Radius::Medium.pixels())
-                        .flex()
-                        .flex_col()
-                        .gap(Spacing::Medium.pixels())
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::Medium.pixels())
-                                        .child(Icon::new(icon).size(IconSize::Large))
-                                        .child(Label::new("Terminal").size(TextSize::Default))
-                                        .child(
-                                            div()
-                                                .px(px(6.))
-                                                .py(px(2.))
-                                                .rounded(px(4.))
-                                                .bg(interactive_default)
-                                                .child(
-                                                    Label::new("$")
-                                                        .size(TextSize::XSmall)
-                                                        .color(Color::Muted),
-                                                ),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap(Spacing::Medium.pixels())
-                                        .px(Spacing::Medium.pixels())
-                                        .py(px(4.))
-                                        .rounded(Radius::Small.pixels())
-                                        .when(has_command && vx.selected_index == 0, move |el| {
-                                            el.bg(accent_selection)
-                                        })
-                                        .when(has_command && vx.selected_index != 0, move |el| {
-                                            el.bg(interactive_hover)
-                                        })
-                                        .when(!has_command, |el| el.bg(rgba(0x00000033)))
-                                        .child(if has_command {
-                                            Label::new("Run").size(TextSize::Small)
-                                        } else {
-                                            Label::new("Run")
-                                                .size(TextSize::Small)
-                                                .color(Color::Disabled)
-                                        })
-                                        .child(
-                                            div()
-                                                .px(px(4.))
-                                                .py(px(2.))
-                                                .rounded(px(3.))
-                                                .bg(rgba(0x00000044))
-                                                .child(if has_command {
-                                                    Label::new("Enter")
-                                                        .size(TextSize::XSmall)
-                                                        .color(Color::Muted)
-                                                } else {
-                                                    Label::new("Enter")
-                                                        .size(TextSize::XSmall)
-                                                        .color(Color::Disabled)
-                                                }),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .w_full()
-                                .p(Spacing::Medium.pixels())
-                                .bg(rgba(0x00000066))
-                                .rounded(Radius::Small.pixels())
-                                .font_family("monospace")
-                                .text_size(TextSize::Default.rems())
-                                .child(if has_command {
-                                    Label::new(query.to_string())
-                                        .color(Color::Default)
-                                        .size(TextSize::Default)
-                                } else {
-                                    Label::new("Type a command to execute...")
-                                        .color(Color::Placeholder)
-                                        .size(TextSize::Default)
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .pt(Spacing::Large.pixels())
-                        .flex()
-                        .flex_col()
-                        .gap(Spacing::XSmall.pixels())
-                        .child(
-                            Label::new("TIPS")
-                                .size(TextSize::XSmall)
-                                .color(Color::Disabled),
-                        )
-                        .child(
-                            Label::new("• Commands run in your default terminal emulator")
-                                .size(TextSize::Small)
-                                .color(Color::Muted),
-                        )
-                        .child(
-                            Label::new("• Interactive commands and output are fully supported")
-                                .size(TextSize::Small)
-                                .color(Color::Muted),
-                        )
-                        .child(
-                            Label::new("• Example: $htop, $vim ~/.config, $cargo build")
-                                .size(TextSize::Small)
-                                .color(Color::Muted),
-                        ),
-                )
-                .into_any_element(),
-        )
-    }
-
-    fn on_select(&self, _index: usize, vx: &ViewContext, _cx: &mut App) -> bool {
-        let command = vx.query.trim();
+impl LauncherPage for ShellModule {
+    fn content(&mut self, query: &str, _cx: &mut Context<Self>) -> Content {
+        let list = List::new().filtering(false).empty(
+            EmptyView::new("Type a command to run")
+                .description("e.g. htop or cargo build")
+                .icon(ICON),
+        );
+        let command = query.trim().to_string();
         if command.is_empty() {
-            return false;
+            return list.into();
         }
-
-        run_in_terminal(command, &self.terminal);
-        true
-    }
-
-    fn render_footer_bar(&self, vx: &ViewContext, cx: &App) -> AnyElement {
-        let actions = if vx.query.trim().is_empty() {
-            vec![("Close", "Esc")]
+        let terminal = if self.terminal.is_empty() {
+            "your terminal"
         } else {
-            vec![("Run", "Enter"), ("Close", "Esc")]
+            &self.terminal
         };
-        footer_hints(actions, cx)
+
+        let in_terminal = (command.clone(), self.terminal.clone());
+        let in_background = command.clone();
+        list.item(
+            Item::new("run", command.clone())
+                .subtitle(format!("Run in {terminal}"))
+                .icon(ICON)
+                .action(
+                    Action::new("Run", move |_, _| {
+                        run_in_terminal(in_terminal.0.clone(), in_terminal.1.clone());
+                        Outcome::Close
+                    })
+                    .icon(IconName::Terminal),
+                )
+                .action(Action::new("Run in Background", move |_, _| {
+                    let mut sh = Command::new("sh");
+                    sh.args(["-c", &in_background]);
+                    if let Err(err) = services::spawn_reaped(sh, in_background.clone()) {
+                        tracing::warn!("Failed to run `{in_background}`: {err}");
+                    }
+                    Outcome::Close
+                }))
+                .action(Action::copy(command).title("Copy Command")),
+        )
+        .into()
     }
 }
 
-fn run_in_terminal(command: &str, preferred: &str) {
-    let command = command.to_string();
-    let preferred = preferred.to_string();
-    std::thread::spawn(move || {
-        if !preferred.is_empty() {
-            let full_command =
-                format!("{}; echo ''; echo 'Press Enter to close...'; read", command);
-            if std::process::Command::new(&preferred)
-                .args(["-e", "sh", "-c", &full_command])
-                .spawn()
-                .is_ok()
-            {
-                return;
-            }
-            tracing::warn!(
-                "Configured terminal '{}' not found, trying defaults",
-                preferred
-            );
+/// Keeps the terminal open after the command exits so its output stays.
+fn run_in_terminal(command: String, preferred: String) {
+    let script = format!("{command}; echo ''; echo 'Press Enter to close...'; read");
+    let preferred =
+        (!preferred.is_empty()).then(|| (preferred.as_str(), ["-e", "sh", "-c"].as_slice()));
+
+    for (terminal, args) in preferred.into_iter().chain(TERMINALS.iter().copied()) {
+        let mut cmd = Command::new(terminal);
+        cmd.args(args).arg(&script);
+        if services::spawn_reaped(cmd, terminal).is_ok() {
+            return;
         }
-
-        let terminals: &[(&str, &[&str])] = &[
-            ("ghostty", &["-e", "sh", "-c"]),
-            ("kitty", &["--", "sh", "-c"]),
-            ("alacritty", &["-e", "sh", "-c"]),
-            ("wezterm", &["start", "--", "sh", "-c"]),
-            ("foot", &["sh", "-c"]),
-            ("gnome-terminal", &["--", "sh", "-c"]),
-            ("konsole", &["-e", "sh", "-c"]),
-            ("xfce4-terminal", &["-e", "sh", "-c"]),
-            ("xterm", &["-e", "sh", "-c"]),
-        ];
-
-        let full_command = format!("{}; echo ''; echo 'Press Enter to close...'; read", command);
-
-        for (terminal, args) in terminals {
-            let mut cmd_args: Vec<&str> = args.to_vec();
-            cmd_args.push(&full_command);
-
-            if std::process::Command::new(terminal)
-                .args(&cmd_args)
-                .spawn()
-                .is_ok()
-            {
-                return;
-            }
-        }
-
-        let _ = std::process::Command::new("x-terminal-emulator")
-            .args(["-e", "sh", "-c", &full_command])
-            .spawn();
-    });
+        tracing::debug!("Terminal '{terminal}' not available, trying the next");
+    }
+    tracing::warn!("No terminal found to run `{command}`");
 }

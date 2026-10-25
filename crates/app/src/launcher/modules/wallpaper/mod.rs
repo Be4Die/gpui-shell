@@ -1,121 +1,339 @@
-//! Wallpaper view for browsing and applying wallpapers.
+//! Wallpaper module: a grid of thumbnails. Applying one generates a matching
+//! theme with matugen in the background; it waits above the grid until
+//! picked.
 
 pub mod config;
 
-use std::path::PathBuf;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
-use gpui::{AnyElement, App, div, img, prelude::*, px};
+use gpui::{AnyElement, App, Context, Global, Hsla, SharedString, Window, div, prelude::*, px};
 use services::WallpaperCommand;
 use ui::{
-    ActiveTheme, Clickable, Color, Icon, IconName, IconSize, Label, LabelCommon, ListItem,
-    ListItemSpacing, Spacing, Switch, SwitchSize, TextSize, Toggleable,
+    ActiveTheme, Base16Palette, Color, Icon, IconName, IconSize, Label, LabelCommon, Radius,
+    Spacing, TextSize, WallpaperPalettes,
 };
 
 use self::config::WallpaperConfig;
-use ui::patterns::footer_hints;
-
-use crate::launcher::view::{LauncherView, ViewContext};
+use crate::launcher::action::{Action, Outcome};
+use crate::launcher::content::{Content, EmptyView, Grid, Item, ItemIcon};
+use crate::launcher::modules::theme::{apply_palette, palette_is_active};
+use crate::launcher::page::{LauncherPage, ModuleDescriptor, ModuleMeta};
 use crate::state::AppState;
 
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
-/// Wallpaper view - browse and set wallpapers.
-///
-/// State Management:
-/// - `directory`: Parsed from config, immutable
-/// - `matugen_enabled`: Arc<AtomicBool> for toggle state
-///   - Arc: Shared ownership so closures can own a reference
-///   - AtomicBool: Thread-safe mutation without &mut self (trait requires &self)
-/// - `matugen_dark_mode`: Arc<AtomicBool> for dark/light mode toggle
-pub struct WallpaperView {
-    prefix: String,
-    directory: PathBuf,
-    /// Entries matching the current query, refreshed once per frame by
-    /// `update_matches`. Held rather than recomputed per row because
-    /// building it rescans the wallpaper directory off disk.
-    matches: Vec<WallpaperEntry>,
-    matugen_type: String,
-    matugen_source_color_index: usize,
-    matugen_enabled: Arc<AtomicBool>,
-    matugen_dark_mode: Arc<AtomicBool>,
+/// Width over height of a thumbnail.
+const THUMB_ASPECT_RATIO: f32 = 1.9;
+
+pub fn descriptor(config: &WallpaperConfig) -> ModuleDescriptor {
+    let config = config.clone();
+    ModuleDescriptor::new(
+        ModuleMeta {
+            id: "wallpaper",
+            prefix: config.prefix.clone().into(),
+            name: "Wallpaper",
+            icon: IconName::Image,
+            description: "Browse and set wallpapers",
+            default: false,
+            in_help: true,
+        },
+        move |cx| WallpaperModule::new(&config, cx),
+    )
 }
 
-impl WallpaperView {
-    pub fn new(config: &WallpaperConfig) -> Self {
+/// The theme generated from the last applied wallpaper. A global, so it
+/// outlives the launcher window.
+#[derive(Default)]
+pub(crate) struct GeneratedTheme {
+    state: Generation,
+    /// Bumped per wallpaper, so a slower earlier run can't land last.
+    id: u64,
+}
+
+#[derive(Default)]
+enum Generation {
+    #[default]
+    Idle,
+    Running(SharedString),
+    Ready(SharedString, Box<WallpaperPalettes>),
+    Failed(SharedString),
+}
+
+impl Global for GeneratedTheme {}
+
+/// The wallpaper the last generated theme came from, with both its palettes.
+pub(crate) fn generated_palettes(cx: &App) -> Option<(SharedString, WallpaperPalettes)> {
+    match &cx.try_global::<GeneratedTheme>()?.state {
+        Generation::Ready(name, palettes) => Some((name.clone(), **palettes)),
+        _ => None,
+    }
+}
+
+const GENERATED_PREFIX: &str = "Wallpaper: ";
+
+/// The theme name `apply_palette` gets for a wallpaper's palette.
+pub(crate) fn generated_theme_name(wallpaper: &str) -> String {
+    format!("{GENERATED_PREFIX}{wallpaper}")
+}
+
+/// The wallpaper a theme name made by [`generated_theme_name`] came from.
+pub(crate) fn wallpaper_of_theme_name(name: &str) -> Option<&str> {
+    name.strip_prefix(GENERATED_PREFIX)
+}
+
+struct WallpaperEntry {
+    path: PathBuf,
+    name: String,
+    extension: String,
+    /// Part of the thumbnail key, so a file overwritten in place re-renders.
+    mtime: Option<SystemTime>,
+}
+
+pub struct WallpaperModule {
+    directory: PathBuf,
+    entries: Vec<WallpaperEntry>,
+    scanning: bool,
+    columns: usize,
+    matugen: bool,
+    matugen_scheme: String,
+}
+
+impl WallpaperModule {
+    fn new(config: &WallpaperConfig, cx: &mut Context<Self>) -> Self {
         let directory = expand_tilde(&config.directory);
+        let scan_dir = directory.clone();
+        cx.spawn(async move |this, cx| {
+            let entries = cx
+                .background_spawn(async move { scan_wallpapers(&scan_dir) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.entries = entries;
+                this.scanning = false;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+
+        cx.default_global::<GeneratedTheme>();
+        cx.observe_global::<GeneratedTheme>(|_, cx| cx.notify())
+            .detach();
+
         Self {
-            prefix: config.prefix.clone(),
             directory,
-            matches: Vec::new(),
-            matugen_type: "scheme-tonal-spot".into(),
-            matugen_source_color_index: 0,
-            matugen_enabled: Arc::new(AtomicBool::new(true)),
-            matugen_dark_mode: Arc::new(AtomicBool::new(true)),
+            entries: Vec::new(),
+            scanning: true,
+            columns: config.columns.max(1),
+            matugen: config.matugen,
+            matugen_scheme: config.matugen_scheme.clone(),
         }
     }
 
-    /// Apply wallpaper, optionally generating a theme with matugen.
-    ///
-    /// This is a static helper that doesn't use `&self` so it can be called
-    /// from closures that need 'static lifetime.
-    fn apply_wallpaper(
-        path: PathBuf,
-        matugen_enabled: &Arc<AtomicBool>,
-        matugen_dark_mode: &Arc<AtomicBool>,
-        matugen_type: &str,
-        matugen_source_color_index: usize,
-        cx: &mut App,
-    ) {
-        use ui::{Base16Palette, Theme};
-
-        // Always set the wallpaper first
+    fn apply(&self, path: PathBuf, name: SharedString, cx: &mut Context<Self>) {
         AppState::wallpaper(cx).dispatch(WallpaperCommand::SetWallpaper(path.clone()));
-
-        // If matugen is enabled, generate theme in background
-        if matugen_enabled.load(Ordering::Relaxed) {
-            let dark_mode = matugen_dark_mode.load(Ordering::Relaxed);
-            let mode = if dark_mode { "dark" } else { "light" };
-            let scheme_type = matugen_type.to_string();
-            let source_index = matugen_source_color_index;
-
-            cx.spawn(async move |cx| {
-                let path_display = path.display().to_string();
-
-                // Run matugen in background executor (blocking operation)
-                let result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        Base16Palette::generate_from_wallpaper(
-                            &path,
-                            mode,
-                            &scheme_type,
-                            source_index,
-                        )
-                    })
-                    .await;
-
-                match result {
-                    Ok(palette) => {
-                        tracing::debug!("Matugen palette generated for: {}", path_display);
-                        // Swap in the generated palette, keeping the user's
-                        // font size and any token overrides.
-                        cx.update(|cx| {
-                            let mut theme = cx.theme().clone();
-                            theme.set_palette("Wallpaper", palette);
-                            Theme::set(theme, cx);
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to generate matugen theme: {}", e);
-                    }
-                }
-            })
-            .detach();
+        if self.matugen {
+            generate_theme(path, name, self.matugen_scheme.clone(), cx);
         }
+    }
+}
+
+/// Run matugen off the UI thread; the result is offered, not applied.
+fn generate_theme(path: PathBuf, name: SharedString, scheme: String, cx: &mut App) {
+    let global = cx.global_mut::<GeneratedTheme>();
+    global.id += 1;
+    global.state = Generation::Running(name.clone());
+    let id = global.id;
+
+    cx.spawn(async move |cx| {
+        let result = cx
+            .background_spawn(async move { Base16Palette::generate_from_wallpaper(&path, &scheme) })
+            .await;
+        cx.update(|cx| {
+            let global = cx.global_mut::<GeneratedTheme>();
+            if global.id != id {
+                return;
+            }
+            global.state = match result {
+                Ok(palettes) => Generation::Ready(name, Box::new(palettes)),
+                Err(err) => {
+                    tracing::warn!("Failed to generate matugen theme: {err}");
+                    Generation::Failed(err.to_string().into())
+                }
+            };
+        });
+    })
+    .detach();
+}
+
+/// A clickable chip previewing one generated palette.
+fn palette_chip(
+    id: &'static str,
+    label: &'static str,
+    palette: Base16Palette,
+    name: SharedString,
+    cx: &App,
+) -> impl IntoElement {
+    let colors = cx.theme().colors();
+    let active = palette_is_active(&palette, cx.theme());
+    let swatch = |color: Hsla| div().size(px(10.)).rounded_full().bg(color);
+
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap(Spacing::Small.pixels())
+        .px(Spacing::Medium.pixels())
+        .py(px(4.))
+        .rounded(Radius::Small.pixels())
+        .bg(palette.base00)
+        .border_1()
+        .border_color(if active { colors.accent } else { colors.border })
+        .cursor_pointer()
+        .hover(|s| s.border_color(colors.accent))
+        .child(
+            div().flex().gap(px(2.)).children(
+                [
+                    palette.base05,
+                    palette.base08,
+                    palette.base0b,
+                    palette.base0d,
+                    palette.base0e,
+                ]
+                .map(swatch),
+            ),
+        )
+        .child(
+            div()
+                .text_size(TextSize::XSmall.rems())
+                .text_color(palette.base05)
+                .child(label),
+        )
+        .on_click(move |_, _, cx| {
+            apply_palette(generated_theme_name(&name).into(), palette, cx);
+        })
+}
+
+impl LauncherPage for WallpaperModule {
+    fn content(&mut self, _query: &str, cx: &mut Context<Self>) -> Content {
+        let dir = self.directory.display().to_string();
+        let empty = if self.scanning {
+            EmptyView::new(format!("Scanning {dir}…"))
+        } else {
+            EmptyView::new(format!("No images in {dir}")).icon(IconName::Image)
+        };
+        Grid::new(self.columns)
+            .aspect_ratio(THUMB_ASPECT_RATIO)
+            .loading(self.scanning)
+            .empty(empty)
+            .items(self.entries.iter().map(|entry| {
+                let path = entry.path.clone();
+                let name: SharedString = entry.name.clone().into();
+                let location = entry.path.to_string_lossy().to_string();
+                Item::new(location.clone(), name.clone())
+                    .keywords(entry.extension.clone())
+                    .icon(ItemIcon::Thumbnail {
+                        path: entry.path.clone(),
+                        mtime: entry.mtime,
+                    })
+                    .action(
+                        Action::listener("Set Wallpaper", cx, move |this, _, cx| {
+                            this.apply(path.clone(), name.clone(), cx);
+                            Outcome::Stay
+                        })
+                        .icon(IconName::Image),
+                    )
+                    .action(Action::open(location.clone()).title("Open in Viewer"))
+                    .action(
+                        Action::copy(location)
+                            .title("Copy Path")
+                            .shortcut("ctrl-shift-c"),
+                    )
+            }))
+            .into()
+    }
+
+    fn render_header(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.matugen {
+            return None;
+        }
+        let colors = cx.theme().colors();
+        let (status, status_color): (SharedString, Color) = match &cx
+            .global::<GeneratedTheme>()
+            .state
+        {
+            Generation::Idle => ("Apply a wallpaper to generate one".into(), Color::Muted),
+            Generation::Running(name) => (format!("Generating from {name}…").into(), Color::Muted),
+            Generation::Ready(name, _) => (format!("From {name}").into(), Color::Muted),
+            Generation::Failed(err) => (err.clone(), Color::Error),
+        };
+        let chips = match &cx.global::<GeneratedTheme>().state {
+            Generation::Ready(name, palettes) => Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::Medium.pixels())
+                    .child(palette_chip(
+                        "wallpaper-theme-dark",
+                        "Dark",
+                        palettes.dark,
+                        name.clone(),
+                        cx,
+                    ))
+                    .child(palette_chip(
+                        "wallpaper-theme-light",
+                        "Light",
+                        palettes.light,
+                        name.clone(),
+                        cx,
+                    )),
+            ),
+            _ => None,
+        };
+
+        Some(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(Spacing::Large.pixels())
+                .px(Spacing::XLarge.pixels())
+                .py(Spacing::Medium.pixels())
+                .bg(colors.surface_background)
+                .border_b_1()
+                .border_color(colors.border)
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::Large.pixels())
+                        .min_w(px(0.))
+                        .child(
+                            Icon::new(IconName::Palette)
+                                .size(IconSize::Small)
+                                .color(Color::Accent),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .min_w(px(0.))
+                                .child(Label::new("Theme from wallpaper").size(TextSize::Small))
+                                .child(
+                                    Label::new(status)
+                                        .size(TextSize::XSmall)
+                                        .color(status_color)
+                                        .truncate(),
+                                ),
+                        ),
+                )
+                .children(chips)
+                .into_any_element(),
+        )
     }
 }
 
@@ -128,294 +346,31 @@ fn expand_tilde(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-struct WallpaperEntry {
-    path: PathBuf,
-    name: String,
-}
-
-fn scan_wallpapers(wallpaper_dir: &PathBuf) -> Vec<WallpaperEntry> {
-    let Ok(read_dir) = std::fs::read_dir(wallpaper_dir) else {
-        tracing::warn!(
-            "Could not read wallpaper directory: {}",
-            wallpaper_dir.display()
-        );
+fn scan_wallpapers(dir: &Path) -> Vec<WallpaperEntry> {
+    let Ok(read_dir) = std::fs::read_dir(dir) else {
+        tracing::warn!("Could not read wallpaper directory: {}", dir.display());
         return Vec::new();
     };
 
     let mut entries: Vec<WallpaperEntry> = read_dir
         .filter_map(|entry| entry.ok())
-        .filter(|entry| {
+        .filter_map(|entry| {
             let path = entry.path();
-            path.is_file()
-                && path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
-        })
-        .map(|entry| {
-            let path = entry.path();
-            let name = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            WallpaperEntry { path, name }
+            let extension = path.extension()?.to_str()?.to_lowercase();
+            if !path.is_file() || !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+                return None;
+            }
+            let name = path.file_stem()?.to_str()?.to_string();
+            let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            Some(WallpaperEntry {
+                path,
+                name,
+                extension: extension.to_uppercase(),
+                mtime,
+            })
         })
         .collect();
 
-    entries.sort_by_key(|e| e.name.to_lowercase());
+    entries.sort_by_cached_key(|entry| entry.name.to_lowercase());
     entries
-}
-
-fn filtered_entries(dir: &PathBuf, query: &str) -> Vec<WallpaperEntry> {
-    let query_lower = query.to_lowercase();
-    scan_wallpapers(dir)
-        .into_iter()
-        .filter(|e| query_lower.is_empty() || e.name.to_lowercase().contains(&query_lower))
-        .collect()
-}
-
-impl LauncherView for WallpaperView {
-    fn prefix(&self) -> &str {
-        &self.prefix
-    }
-
-    fn name(&self) -> &'static str {
-        "Wallpaper"
-    }
-
-    fn icon(&self) -> IconName {
-        IconName::Image
-    }
-
-    fn description(&self) -> &'static str {
-        "Browse and set wallpapers"
-    }
-
-    fn update_matches(&mut self, vx: &ViewContext, _cx: &App) {
-        self.matches = filtered_entries(&self.directory, vx.query);
-    }
-
-    fn match_count(&self, _vx: &ViewContext, _cx: &App) -> usize {
-        self.matches.len()
-    }
-
-    fn render_header(&self, _vx: &ViewContext, cx: &App) -> Option<AnyElement> {
-        let theme = cx.theme();
-        let text_primary = theme.colors.text;
-        let text_muted = theme.colors.text_muted;
-        let accent_primary = theme.colors.accent;
-        let bg_secondary = theme.colors.surface_background;
-        let border = theme.colors.border;
-
-        let enabled = self.matugen_enabled.load(Ordering::Relaxed);
-        let dark_mode = self.matugen_dark_mode.load(Ordering::Relaxed);
-
-        let matugen_enabled_atomic = Arc::clone(&self.matugen_enabled);
-        let matugen_dark_mode_atomic = Arc::clone(&self.matugen_dark_mode);
-
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .bg(bg_secondary)
-                .border_b_1()
-                .border_color(border)
-                // Main toggle section
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .px(Spacing::XLarge.pixels())
-                        .py(Spacing::Large.pixels())
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(Spacing::Large.pixels())
-                                // Icon indicator
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .w(px(32.))
-                                        .h(px(32.))
-                                        .rounded(px(6.))
-                                        .bg(if enabled {
-                                            accent_primary
-                                        } else {
-                                            theme.colors.element_background
-                                        })
-                                        .child(
-                                            Icon::new(IconName::Palette)
-                                                .size(IconSize::Small)
-                                                .color(Color::Custom(if enabled {
-                                                    theme.colors.background
-                                                } else {
-                                                    text_muted
-                                                })),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_col()
-                                        .gap(px(2.))
-                                        .child(
-                                            div()
-                                                .text_color(text_primary)
-                                                .text_sm()
-                                                .child("Material You Theming"),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_color(text_muted)
-                                                .text_xs()
-                                                .child("Auto-generate theme colors from wallpaper"),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            Switch::new("matugen-toggle", enabled)
-                                .size(SwitchSize::Medium)
-                                .on_click(move |checked, _, _cx| {
-                                    matugen_enabled_atomic
-                                        .store(checked.selected(), Ordering::Relaxed);
-                                }),
-                        ),
-                )
-                // Dark/Light mode selector (animated collapse)
-                .when(enabled, |this| {
-                    this.child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .px(Spacing::XLarge.pixels())
-                            .pb(Spacing::Large.pixels())
-                            .pt(Spacing::XSmall.pixels())
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::Medium.pixels())
-                                    .child(
-                                        div().text_color(text_muted).text_xs().child("Theme Mode"),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::Medium.pixels())
-                                    .child(Icon::new(IconName::Sun).size(IconSize::XSmall).color(
-                                        Color::Custom(if dark_mode {
-                                            text_muted
-                                        } else {
-                                            accent_primary
-                                        }),
-                                    ))
-                                    .child(
-                                        Switch::new("matugen-dark-mode-toggle", dark_mode)
-                                            .size(SwitchSize::Small)
-                                            .on_click(move |checked, _, _cx| {
-                                                matugen_dark_mode_atomic
-                                                    .store(checked.selected(), Ordering::Relaxed);
-                                            }),
-                                    )
-                                    .child(Icon::new(IconName::Moon).size(IconSize::XSmall).color(
-                                        Color::Custom(if dark_mode {
-                                            accent_primary
-                                        } else {
-                                            text_muted
-                                        }),
-                                    )),
-                            ),
-                    )
-                })
-                .into_any_element(),
-        )
-    }
-
-    fn render_item(&self, index: usize, selected: bool, _vx: &ViewContext, cx: &App) -> AnyElement {
-        let Some(entry) = self.matches.get(index) else {
-            return div().into_any_element();
-        };
-
-        let theme = cx.theme();
-        let path_for_click = entry.path.clone();
-        let preview_path = entry.path.clone();
-        let interactive_default = theme.colors.element_background;
-
-        // Clone Arc fields for closure
-        let matugen_enabled = Arc::clone(&self.matugen_enabled);
-        let matugen_dark_mode = Arc::clone(&self.matugen_dark_mode);
-        let matugen_type = self.matugen_type.clone();
-        let matugen_source_color_index = self.matugen_source_color_index;
-
-        let extension = entry
-            .path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_uppercase();
-
-        ListItem::new(format!("wp-{index}"))
-            .spacing(ListItemSpacing::Sparse)
-            .toggle_state(selected)
-            .start_slot(
-                div()
-                    .w(px(40.))
-                    .h(px(28.))
-                    .rounded(px(4.))
-                    .bg(interactive_default)
-                    .overflow_hidden()
-                    .child(img(preview_path).size_full()),
-            )
-            .on_click(move |_, _, cx| {
-                WallpaperView::apply_wallpaper(
-                    path_for_click.clone(),
-                    &matugen_enabled,
-                    &matugen_dark_mode,
-                    &matugen_type,
-                    matugen_source_color_index,
-                    cx,
-                );
-            })
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(1.))
-                    .child(Label::new(entry.name.clone()).size(TextSize::Default))
-                    .child(
-                        Label::new(extension)
-                            .size(TextSize::XSmall)
-                            .color(Color::Muted),
-                    ),
-            )
-            .into_any_element()
-    }
-
-    fn on_select(&self, index: usize, _vx: &ViewContext, cx: &mut App) -> bool {
-        if let Some(entry) = self.matches.get(index) {
-            Self::apply_wallpaper(
-                entry.path.clone(),
-                &self.matugen_enabled,
-                &self.matugen_dark_mode,
-                &self.matugen_type,
-                self.matugen_source_color_index,
-                cx,
-            );
-            false
-        } else {
-            false
-        }
-    }
-
-    fn render_footer_bar(&self, _vx: &ViewContext, cx: &App) -> AnyElement {
-        footer_hints(vec![("Apply", "Enter"), ("Close", "Esc")], cx)
-    }
 }

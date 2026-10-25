@@ -28,7 +28,7 @@
   Colours are literal hex on purpose: some viewers can't resolve var().
 -->
   <title id="title">GPUi Shell architecture</title>
-  <desc id="desc">One process. crates/services talks to everything outside it: D-Bus daemons, compositor IPC, PulseAudio, PipeWire, udev and desktop files, each through a service that holds its state in a Mutable. crates/app holds every service in the AppState global; state::watch turns their signals into re-renders of the layer-shell windows: per-display bar and dock, panels, launcher, OSD and notification popups. Windows send commands back with dispatch. Config and theme files are hot-reloaded with inotify, and a second gpuishell invocation reaches the running one through a unix socket. crates/ui provides the components, shell patterns and theme the windows render with; crates/assets the icons; crates/story is a dev-only gallery.</desc>
+  <desc id="desc">One process. crates/services talks to everything outside it: D-Bus daemons, compositor IPC, PulseAudio, PipeWire, udev, desktop files and wl-clipboard, each through a service that holds its state in a Mutable. crates/app holds every service in the AppState global; state::watch turns their signals into re-renders of the layer-shell windows: per-display bar and dock, panels, launcher, OSD and notification popups. Windows send commands back with dispatch. Config and theme files are hot-reloaded with inotify, and a second gpuishell invocation reaches the running one through a unix socket. crates/ui provides the components, shell patterns and theme the windows render with; crates/assets the icons; crates/story is a dev-only gallery.</desc>
   <style>
     .bg{fill:#f6f8fa}
     .frame{fill:#ffffff;fill-opacity:.55;stroke:#d0d7de;stroke-dasharray:6 4}
@@ -109,9 +109,10 @@
   <text class="s" x="40" y="338">PulseAudio · PipeWire</text>
   <text class="s" x="40" y="356">udev backlight · /proc</text>
 
-  <rect class="sys" x="24" y="388" width="220" height="64" rx="8"/>
+  <rect class="sys" x="24" y="388" width="220" height="80" rx="8"/>
   <text class="t" x="40" y="412">Desktop &amp; tools</text>
   <text class="s" x="40" y="434">*.desktop · icons · awww</text>
+  <text class="s" x="40" y="452">wl-paste · wl-copy</text>
 
   <rect class="sys" x="24" y="484" width="220" height="96" rx="8"/>
   <text class="t" x="40" y="508">~/.config/gpuishell/</text>
@@ -153,9 +154,10 @@
   <text class="s" x="300" y="338">libpulse · pipewire · udev</text>
   <text class="s" x="300" y="356">sysinfo polls /proc</text>
 
-  <rect class="svc" x="284" y="388" width="320" height="64" rx="8"/>
-  <text class="t" x="300" y="412">applications · wallpaper</text>
+  <rect class="svc" x="284" y="388" width="320" height="80" rx="8"/>
+  <text class="t" x="300" y="412">applications · wallpaper · clipboard</text>
   <text class="s" x="300" y="434">desktop entries · awww</text>
+  <text class="s" x="300" y="452">clipboard: wl-paste --watch</text>
 
   <!-- services → app -->
   <path class="edge" d="M620 148H676" marker-end="url(#arrow)"/>
@@ -300,5 +302,5 @@
 
   <path class="cmd" d="M1352 820V846H150V824" marker-end="url(#arrow-c)"/>
 
-  <text class="s" x="40" y="878">start() takes a fresh RunToken · stop()/restart bump the generation, the old listener bows out · mode per service: eager | lazy | off ([services], ;s view)</text>
+  <text class="s" x="40" y="878">start() takes a fresh RunToken · stop()/restart bump the generation, the old listener bows out · mode per service: eager | lazy | off ([services], ;s module)</text>
 </svg>

@@ -1,11 +1,11 @@
-//! Web search view configuration.
+//! Web search module configuration.
 
 use serde::{Deserialize, Serialize};
 use ui::{IconName, IconSource};
 
 use crate::icons::{self, ConfigIcon};
 
-/// Web search view configuration.
+/// Web search module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WebConfig {

@@ -1,8 +1,8 @@
-//! Theme view configuration.
+//! Theme module configuration.
 
 use serde::{Deserialize, Serialize};
 
-/// Themes view configuration.
+/// Themes module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ThemesConfig {
