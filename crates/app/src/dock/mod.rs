@@ -315,6 +315,19 @@ impl Dock {
         }
     }
 
+    fn set_pointer_inside(&mut self, inside: bool, cx: &mut Context<Self>) {
+        if inside == self.pointer_inside {
+            return;
+        }
+        self.pointer_inside = inside;
+        if inside {
+            self.hide_generation += 1;
+            self.reveal_generation += 1;
+        } else if self.hidden_by_rule {
+            self.schedule_rehide(cx);
+        }
+    }
+
     fn schedule_rehide(&mut self, cx: &mut Context<Self>) {
         self.hide_generation += 1;
         self.reveal_generation += 1;
@@ -602,14 +615,13 @@ impl Render for Dock {
             .bg(background)
             .border_1()
             .border_color(border)
-            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
-                this.pointer_inside = *hovered;
-                if *hovered {
-                    this.hide_generation += 1;
-                    this.reveal_generation += 1;
-                } else if this.hidden_by_rule {
-                    this.schedule_rehide(cx);
-                }
+            // gpui reports a hover at the window origin on first paint, before any
+            // pointer entered; only a real pointer counts, and a move fills in the enter.
+            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                this.set_pointer_inside(*hovered && window.is_window_hovered(), cx);
+            }))
+            .on_mouse_move(cx.listener(|this, _event, _window, cx| {
+                this.set_pointer_inside(true, cx);
             }))
             .children(elements)
             .child(

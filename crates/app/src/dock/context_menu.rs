@@ -5,6 +5,8 @@ use gpui::{
 };
 use ui::{ActiveTheme, Radius, Spacing};
 
+use crate::keybinds::Cancel;
+
 use super::{
     DOCK_CONTEXT_MENU_BORDER_WIDTH, DOCK_CONTEXT_MENU_GAP, DOCK_CONTEXT_MENU_ROW_HEIGHT,
     DOCK_CONTEXT_MENU_VERTICAL_PADDING, toggle_pin,
@@ -131,6 +133,12 @@ impl Render for DockContextMenu {
         }
 
         div()
+            .id("dock-context-menu")
+            .track_focus(&self.focus_handle)
+            .key_context("DockContextMenu")
+            .on_action(cx.listener(|_this, _: &Cancel, _window, cx| {
+                crate::windows::ShellWindows::close_panel(cx);
+            }))
             .flex()
             .flex_col()
             .gap(px(DOCK_CONTEXT_MENU_GAP))
