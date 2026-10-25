@@ -5,7 +5,7 @@
 
 use gpui::{App, Hsla, MouseButton, div, prelude::*, px};
 use services::{AudioCommand, BluetoothCommand, BluetoothState, NetworkCommand};
-use ui::patterns::card_radius;
+use ui::patterns::surface_radius;
 use ui::{ActiveTheme, Color, Fade, Icon, IconName, IconSize, Opacity, Spacing, TextSize};
 
 use crate::state::AppState;
@@ -219,7 +219,7 @@ fn render_expandable_module(
         .items_center()
         .gap(Spacing::XSmall.pixels())
         .flex_1()
-        .rounded(card_radius())
+        .rounded(surface_radius())
         .border_1()
         .border_color(border)
         .bg(ink.background)
@@ -308,7 +308,7 @@ fn render_simple_module(
         .flex_1()
         .px(Spacing::Medium.pixels())
         .py(Spacing::XSmall.pixels())
-        .rounded(card_radius())
+        .rounded(surface_radius())
         .border_1()
         .border_color(ink.border)
         .bg(ink.background)
@@ -403,7 +403,7 @@ fn render_status_module(
         .flex_1()
         .px(Spacing::Medium.pixels())
         .py(Spacing::XSmall.pixels())
-        .rounded(card_radius())
+        .rounded(surface_radius())
         .border_1()
         .border_color(border_subtle)
         .bg(bg_secondary)

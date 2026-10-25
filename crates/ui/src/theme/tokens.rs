@@ -243,10 +243,10 @@ pub fn inset_radius(outer: Pixels, padding: Pixels) -> Pixels {
 }
 
 /// [`inset_radius`] for a card or row inside a padded surface: concentric,
-/// but never sharper than [`Radius::Small`] while the surface itself is
-/// rounded, so a panel padded by its own radius keeps soft cards.
+/// but never sharper than [`Radius::Large`] while the surface itself is
+/// rounded, so a panel padded by its own radius keeps soft, round cards.
 pub fn nested_radius(outer: Pixels, padding: Pixels) -> Pixels {
-    inset_radius(outer, padding).max(Radius::Small.pixels().min(outer))
+    inset_radius(outer, padding).max(Radius::Large.pixels().min(outer))
 }
 
 /// Semantic alpha for UI states. These fade text, borders and fills within a
@@ -384,12 +384,12 @@ mod tests {
     }
 
     /// A nested corner is concentric when there is room, floors at the
-    /// small token otherwise, and stays square inside a square surface.
+    /// large token otherwise, and stays square inside a square surface.
     #[test]
-    fn nested_radius_floors_at_small_unless_square() {
-        let small = Radius::Small.pixels();
+    fn nested_radius_floors_at_large_unless_square() {
+        let large = Radius::Large.pixels();
         assert_eq!(nested_radius(px(24.), px(12.)), px(12.));
-        assert_eq!(nested_radius(px(12.), px(12.)), small);
+        assert_eq!(nested_radius(px(12.), px(12.)), large);
         assert_eq!(nested_radius(px(0.), px(12.)), px(0.));
         assert_eq!(nested_radius(px(2.), px(0.)), px(2.));
     }

@@ -453,11 +453,6 @@ impl LauncherPage for ThemeModule {
             .placeholder("Search themes...")
             .dropdown(dropdown)
             .empty(self.empty_view());
-        // The non-colour knobs sit above the schemes; a source filter is
-        // about palettes, so they step aside for it.
-        if self.filter == Filter::All {
-            list = list.section(Section::new("Appearance").items(appearance::items(cx)));
-        }
         for source in Source::ALL.into_iter().filter(|s| self.filter.accepts(*s)) {
             let items: Vec<Item> = self
                 .entries
@@ -469,6 +464,12 @@ impl LauncherPage for ThemeModule {
             if !items.is_empty() {
                 list = list.section(Section::new(source.label()).items(items));
             }
+        }
+        // The non-colour knobs live on their own page; the list is schemes.
+        // Last, and only when no source filter is on, so it never gets in
+        // the way of browsing - searching "font" or "opacity" finds it.
+        if self.filter == Filter::All {
+            list = list.section(Section::new("More").item(appearance::entry_row(cx)));
         }
         list.into()
     }

@@ -48,7 +48,7 @@ pub fn surface_padding() -> Pixels {
 }
 
 /// The corner of a card or row sitting [`surface_padding`] inside a surface:
-/// concentric with it, never sharper than the small token.
+/// concentric with it, never sharper than the large token.
 pub fn card_radius() -> Pixels {
     nested_radius(surface_radius(), surface_padding())
 }

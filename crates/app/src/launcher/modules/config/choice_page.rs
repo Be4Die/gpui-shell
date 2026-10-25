@@ -27,20 +27,23 @@ impl<S: Editable> LauncherPage for ChoicePage<S> {
             .title(self.field.label)
             .placeholder("Filter options…")
             .actions(file_actions(ActionPanel::new()));
-        let Editor::Choice { current, options } = &self.field.editor else {
+        let Editor::Choice {
+            current, options, ..
+        } = &self.field.editor
+        else {
             return list.into();
         };
         let selected = current(self.path.read(cx));
         let items = options.iter().enumerate().map(|(ix, option)| {
             let path = self.path.clone();
             let field = self.field.clone();
-            let apply = option.apply.clone();
+
             let mut item = Item::new(option.label, option.label)
                 .icon(self.field.editor.icon())
                 .actions(file_actions(ActionPanel::new().action(Action::new(
                     "Select",
                     move |_, cx| {
-                        path.write(&field, |s| apply(s), cx);
+                        field.choose(&path, ix, cx);
                         Outcome::Pop
                     },
                 ))));

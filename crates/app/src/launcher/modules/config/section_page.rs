@@ -155,10 +155,23 @@ pub fn unsaved_banner(cx: &App) -> Option<AnyElement> {
                         .color(Color::Warning),
                 )
                 .child(
-                    Label::new("Ctrl+S saves, Ctrl+Shift+D discards")
-                        .size(TextSize::XSmall)
-                        .color(Color::Muted)
-                        .truncate(),
+                    div().flex_1().min_w(px(0.)).child(
+                        Label::new("Ctrl+S saves, Ctrl+Shift+D discards")
+                            .size(TextSize::XSmall)
+                            .color(Color::Muted)
+                            .truncate(),
+                    ),
+                )
+                // The same two actions for the mouse.
+                .child(
+                    Button::new("unsaved-discard", "Discard")
+                        .style(ButtonStyle::Outlined)
+                        .on_click(|_, _, cx| store::discard(cx)),
+                )
+                .child(
+                    Button::new("unsaved-save", "Save")
+                        .style(ButtonStyle::Filled)
+                        .on_click(|_, _, cx| store::save(cx)),
                 ),
         )
         .into_any_element(),
@@ -381,6 +394,10 @@ fn field_detail<S: Editable>(
         let body = match &field.editor {
             Editor::Nested { form, .. } => form(&path, 1, cx),
             Editor::Bundle(fields) => render_form(&path, &[Group::new("", fields.to_vec())], 1, cx),
+            // A preset with a preview is chosen on the preview itself.
+            Editor::Choice {
+                commit: Some(_), ..
+            } if field.preview.is_some() => div().into_any_element(),
             Editor::Toggle(_) | Editor::Number { .. } | Editor::Choice { .. } => {
                 field_widget(&path, &field, cx)
             }
@@ -589,17 +606,18 @@ fn field_widget<S: Editable>(path: &ConfigPath<S>, field: &Field<S>, cx: &App) -
             }
             row.into_any_element()
         }
-        Editor::Choice { current, options } => {
+        Editor::Choice {
+            current, options, ..
+        } => {
             let selected = current(section);
             let buttons = options.iter().enumerate().map(|(ix, option)| {
                 let path = path.clone();
                 let field = field.clone();
-                let apply = option.apply.clone();
                 Button::new(SharedString::from(format!("{id}-{ix}")), option.label)
                     .style(ButtonStyle::Outlined)
                     .toggle_state(ix == selected)
                     .on_click(move |_, _, cx| {
-                        path.write(&field, |s| apply(s), cx);
+                        field.choose(&path, ix, cx);
                     })
             });
             div()

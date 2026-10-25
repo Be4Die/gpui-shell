@@ -1,37 +1,22 @@
-//! Pick the bar's look: one row per preset with a miniature of it, Enter
-//! applies the `[bar]` keys and the theme's radius scale together. The
-//! config edits stay pending until Save, like every other editor page; the
-//! theme change is written to `theme.toml` at once, like a scheme switch.
+//! Applying a bar [`Look`] from the editor and drawing it: the `[bar]` keys
+//! become pending edits like any other change (Save writes them), the
+//! theme's radius scale is written to `theme.toml` at once, like a scheme
+//! switch.
 
-use gpui::{AnyElement, App, Context, Hsla, Window, div, prelude::*, px};
+use gpui::{AnyElement, App, FontWeight, Hsla, MouseButton, SharedString, div, prelude::*, px};
 use toml_edit::Value;
-use ui::patterns::{BarChip, BarEdge, BarRhythm, BarSegment, BarShape, BarSurface, ChipGeometry};
+use ui::patterns::{
+    BarChip, BarEdge, BarRhythm, BarSegment, BarShape, BarSurface, ChipGeometry, card_radius,
+};
 use ui::{
     ActiveTheme, Color, Icon, IconName, IconSize, Label, LabelCommon, Radius, Spacing, TextSize,
-    h_flex,
+    h_flex, v_flex,
 };
 
 use super::schema::{ConfigPath, to_value};
-use super::section_page::{file_actions, unsaved_banner, watch_revision};
 use crate::bar::config::BarConfig;
 use crate::bar::look::Look;
-use crate::launcher::action::{Action, ActionPanel, Outcome};
-use crate::launcher::content::{Accessory, Content, Detail, Item, List, Section};
 use crate::launcher::modules::theme::apply_theme;
-use crate::launcher::page::{LauncherPage, Page};
-
-pub struct LookPage {
-    path: ConfigPath<BarConfig>,
-}
-
-impl LookPage {
-    pub fn open(path: ConfigPath<BarConfig>, cx: &mut App) -> Page {
-        Page::new(cx.new(|cx| {
-            watch_revision(cx);
-            Self { path }
-        }))
-    }
-}
 
 /// Apply `look`: every `[bar]` key it owns as its own pending edit (unset
 /// ones removed, so defaults apply again), then the theme's radius scale.
@@ -62,56 +47,71 @@ pub fn apply_look(look: Look, path: &ConfigPath<BarConfig>, cx: &mut App) {
     apply_theme(theme, cx);
 }
 
-impl LauncherPage for LookPage {
-    fn content(&mut self, _query: &str, cx: &mut Context<Self>) -> Content {
-        let bar = self.path.read(cx);
-        let current = Look::current(bar, cx.theme().radius_scale);
-        let items = Look::ALL.into_iter().map(|look| {
-            let path = self.path.clone();
-            let mut item = Item::new(look.label().to_lowercase(), look.label())
-                .subtitle(look.description())
-                .icon(match look {
-                    Look::Blocky => IconName::Square,
-                    Look::Rounded => IconName::Circle,
-                    Look::Floating => IconName::Layout,
+/// The three looks stacked, each a card you click to apply it; the current
+/// one is outlined in accent. This is the Look row's whole control.
+pub fn look_preview(path: &ConfigPath<BarConfig>, cx: &App) -> AnyElement {
+    let colors = cx.theme().colors();
+    let current = Look::current(path.read(cx), cx.theme().radius_scale);
+    v_flex()
+        .w_full()
+        .gap(Spacing::Medium.pixels())
+        .children(Look::ALL.into_iter().map(|look| {
+            let is_current = current == Some(look);
+            let path = path.clone();
+            v_flex()
+                .id(SharedString::from(format!("look-{}", look.label())))
+                .w_full()
+                .gap(Spacing::XSmall.pixels())
+                .p(Spacing::Medium.pixels())
+                .rounded(card_radius())
+                .border_1()
+                .border_color(if is_current {
+                    colors.accent
+                } else {
+                    colors.border_variant
                 })
-                .keywords("look preset blocky rounded square pill floating radius")
-                .detail(Detail::new().widget(move |cx| preview(look, cx)))
-                .actions(file_actions(ActionPanel::new().action(
-                    Action::new("Apply", move |_, cx| {
-                        apply_look(look, &path, cx);
-                        Outcome::Stay
-                    })
-                    .icon(IconName::Check),
-                )));
-            if current == Some(look) {
-                item = item.accessory(Accessory::tag("current"));
-            }
-            item
-        });
-        List::new()
-            .title("Bar look")
-            .placeholder("Pick a look, then Save")
-            .actions(file_actions(ActionPanel::new()))
-            .section(
-                Section::new("Presets")
-                    .subtitle(
-                        "Sets style, borders, widget chrome, stretch and end padding under [bar], \
-                         and radius_scale in theme.toml. Widgets and their order are kept; group \
-                         widgets in Layout to share a pill.",
-                    )
-                    .items(items),
-            )
-            .into()
-    }
-
-    fn render_header(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        unsaved_banner(cx)
-    }
+                .bg(colors.surface_background)
+                .cursor_pointer()
+                .hover(|s| s.bg(colors.element_hover))
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    apply_look(look, &path, cx);
+                })
+                .child(
+                    h_flex()
+                        .gap(Spacing::Small.pixels())
+                        .child(
+                            Label::new(look.label())
+                                .size(TextSize::Small)
+                                .weight(FontWeight::SEMIBOLD)
+                                .color(if is_current {
+                                    Color::Accent
+                                } else {
+                                    Color::Default
+                                }),
+                        )
+                        .child(
+                            div().flex_1().min_w(px(0.)).child(
+                                Label::new(look.description())
+                                    .size(TextSize::XSmall)
+                                    .color(Color::Muted)
+                                    .truncate(),
+                            ),
+                        )
+                        .child(if is_current {
+                            Icon::new(IconName::Check)
+                                .size(IconSize::Small)
+                                .color(Color::Accent)
+                                .into_any_element()
+                        } else {
+                            Label::new("Use")
+                                .size(TextSize::XSmall)
+                                .color(Color::Muted)
+                                .into_any_element()
+                        }),
+                )
+                .child(preview(look, cx))
+        }))
+        .into_any_element()
 }
 
 /// The bar as `look` would draw it, at the preset's own radius scale so
@@ -128,7 +128,9 @@ fn preview(look: Look, cx: &App) -> AnyElement {
     };
     let chip_geometry = |grouped: bool| match look {
         Look::Blocky => ChipGeometry::stretched(&rhythm, grouped, radius(Radius::Large)),
-        Look::Rounded | Look::Floating => ChipGeometry::derive(&rhythm, grouped, radius(Radius::Large)),
+        Look::Rounded | Look::Floating => {
+            ChipGeometry::derive(&rhythm, grouped, radius(Radius::Large))
+        }
     };
     let chip = |content: AnyElement, grouped: bool| {
         BarChip::new(content)
@@ -158,10 +160,10 @@ fn preview(look: Look, cx: &App) -> AnyElement {
                 side
             })
             .px(rhythm.unit)
-            .rounded(if look == Look::Blocky {
-                radius(Radius::Large)
-            } else {
-                px(Radius::Large.scaled(scale)) - rhythm.unit
+            .rounded(match look {
+                Look::Blocky => radius(Radius::Large),
+                Look::Rounded => radius(Radius::Full).min(side / 2.),
+                Look::Floating => px(Radius::Large.scaled(scale)) - rhythm.unit,
             })
             .bg(if active {
                 colors.accent
@@ -181,7 +183,7 @@ fn preview(look: Look, cx: &App) -> AnyElement {
     let cells = chip(
         h_flex()
             .gap(if look == Look::Blocky {
-                px(0.)
+                px(1.)
             } else {
                 rhythm.breath
             })
@@ -201,7 +203,8 @@ fn preview(look: Look, cx: &App) -> AnyElement {
             px(6.),
             px(4.),
         ),
-        Look::Blocky | Look::Floating => (colors.background, None, px(0.), px(0.), px(0.)),
+        Look::Blocky => (colors.background, None, px(0.), px(0.), rhythm.breath),
+        Look::Floating => (colors.background, None, px(0.), px(0.), px(0.)),
     };
     let segment = |children: Vec<AnyElement>| {
         BarSegment::new(false)
@@ -235,7 +238,11 @@ fn preview(look: Look, cx: &App) -> AnyElement {
                     .shape(shape)
                     .border(look == Look::Floating)
                     .background(bar_fill)
-                    .padding(if look == Look::Rounded { gap } else { rhythm.unit })
+                    .padding(match look {
+                        Look::Rounded => gap,
+                        Look::Blocky => px(0.),
+                        Look::Floating => rhythm.unit,
+                    })
                     .inset(inset)
                     .segment_gap(gap)
                     .start([

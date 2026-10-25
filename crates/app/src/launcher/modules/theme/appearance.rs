@@ -1,5 +1,6 @@
-//! The `;t` rows for the theme's non-colour knobs: font size, corner radius
-//! and surface opacity. Enter steps a knob up, Shift+Enter down, and the
+//! The theme's non-colour knobs - font size, corner radius, surface opacity
+//! and the bar look - on their own page behind one row of the `~` list, so
+//! the list stays about schemes. Enter steps a knob up, Shift+Enter down, the
 //! action panel offers the presets; every change applies at once and is
 //! saved to `theme.toml`, like a palette.
 
@@ -9,9 +10,10 @@ use ui::{
     Theme,
 };
 
-use super::{ThemeModule, apply_theme};
+use super::apply_theme;
 use crate::launcher::action::{Action, ActionPanel, Outcome};
-use crate::launcher::content::{Accessory, Detail, Item};
+use crate::launcher::content::{Accessory, Content, Detail, Item, List, Section};
+use crate::launcher::page::LauncherPage;
 
 /// One knob: how it reads, how it steps and which presets it offers.
 struct Knob {
@@ -99,9 +101,43 @@ const OPACITY: Knob = Knob {
 
 const KNOBS: [&Knob; 3] = [&FONT, &RADIUS, &OPACITY];
 
+/// The page the knobs live on.
+pub(super) struct AppearancePage;
+
+impl LauncherPage for AppearancePage {
+    fn content(&mut self, _query: &str, cx: &mut Context<Self>) -> Content {
+        List::new()
+            .title("Appearance")
+            .placeholder("Enter steps up, Shift+Enter down, Tab for presets")
+            .section(Section::untitled().items(items(cx)))
+            .into()
+    }
+}
+
+/// The one row the `~` list keeps: opens [`AppearancePage`]. Its subtitle
+/// carries the current values, so the list still answers at a glance.
+pub(super) fn entry_row<V: 'static>(cx: &Context<V>) -> Item {
+    let theme = cx.theme();
+    let summary = format!(
+        "{} · {} · {}",
+        (FONT.format)((FONT.get)(theme)),
+        (RADIUS.format)((RADIUS.get)(theme)),
+        (OPACITY.format)((OPACITY.get)(theme)),
+    );
+    Item::new("appearance", "Appearance")
+        .subtitle("Font size, corner radius, surface opacity and the bar look")
+        .icon(IconName::Sliders)
+        .keywords("appearance font size corner radius opacity look blocky rounded")
+        .accessory(Accessory::text(summary))
+        .action(
+            Action::new("Open", |_, cx| Outcome::push(cx.new(|_| AppearancePage)))
+                .icon(IconName::ChevronRight),
+        )
+}
+
 /// The rows, in the order they are listed: the bar look first, since it
 /// is what people come looking for, then the three knobs.
-pub(super) fn items(cx: &Context<ThemeModule>) -> Vec<Item> {
+pub(super) fn items<V: 'static>(cx: &Context<V>) -> Vec<Item> {
     let theme = cx.theme();
     std::iter::once(look_row(cx))
         .chain(KNOBS.iter().map(|knob| knob.item(theme, cx)))
@@ -110,7 +146,7 @@ pub(super) fn items(cx: &Context<ThemeModule>) -> Vec<Item> {
 
 /// A pointer to the config editor's Look page, which sets the `[bar]`
 /// keys and the radius scale together.
-fn look_row(cx: &Context<ThemeModule>) -> Item {
+fn look_row<V: 'static>(cx: &Context<V>) -> Item {
     let bar = &crate::config::Config::global(cx).bar;
     let current = crate::bar::look::Look::current(bar, cx.theme().radius_scale)
         .map_or("Custom", |look| look.label());
@@ -134,7 +170,7 @@ fn look_row(cx: &Context<ThemeModule>) -> Item {
 }
 
 impl Knob {
-    fn item(&'static self, theme: &Theme, cx: &Context<ThemeModule>) -> Item {
+    fn item<V: 'static>(&'static self, theme: &Theme, cx: &Context<V>) -> Item {
         let current = (self.get)(theme);
         let step = |title: &'static str, icon: IconName, direction: f32| {
             Action::listener(title, cx, move |_, _, cx| {

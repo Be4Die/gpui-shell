@@ -151,6 +151,9 @@ pub struct ChoiceOption<S> {
 /// Opens a page for a nested or custom field.
 pub type Open<S> = Rc<dyn Fn(ConfigPath<S>, &mut App) -> Page>;
 
+/// Applies a preset: the chosen option's index, with the section's path.
+pub type Commit<S> = Rc<dyn Fn(&ConfigPath<S>, usize, &mut App)>;
+
 /// Builds the row for a child with a single field, titled after its parent.
 pub type Hoist<S> = Rc<dyn Fn(&Field<S>, &ConfigPath<S>, &App) -> Item>;
 
@@ -180,6 +183,9 @@ pub enum Editor<S> {
     Choice {
         current: Rc<dyn Fn(&S) -> usize>,
         options: Rc<[ChoiceOption<S>]>,
+        /// A preset: choosing writes several keys (and maybe the theme)
+        /// through this instead of one key through the field's lens.
+        commit: Option<Commit<S>>,
     },
     /// A child struct: its page on Enter, its form in the detail pane, and
     /// its fields' actions in the menu, so one row edits the whole child.
@@ -225,9 +231,14 @@ impl<S> Clone for Editor<S> {
                 lens: *lens,
                 hint: *hint,
             },
-            Editor::Choice { current, options } => Editor::Choice {
+            Editor::Choice {
+                current,
+                options,
+                commit,
+            } => Editor::Choice {
                 current: current.clone(),
                 options: options.clone(),
+                commit: commit.clone(),
             },
             Editor::Nested {
                 open,
@@ -396,7 +407,66 @@ impl<S: Editable> Field<S> {
             let value = (lens.get)(s);
             all.iter().position(|e| *e == value).unwrap_or(0)
         });
-        Self::new(key, label, Editor::Choice { current, options })
+        Self::new(
+            key,
+            label,
+            Editor::Choice {
+                current,
+                options,
+                commit: None,
+            },
+        )
+    }
+
+    /// A choice between presets that each set several keys: `current` says
+    /// which one the struct is in (out of range: none, shown as "Custom")
+    /// and `commit` applies the chosen one. Rendered like a choice - buttons
+    /// in the detail pane, Enter cycles.
+    pub fn presets(
+        key: &'static str,
+        label: &'static str,
+        labels: &[&'static str],
+        current: impl Fn(&S) -> usize + 'static,
+        commit: impl Fn(&ConfigPath<S>, usize, &mut App) + 'static,
+    ) -> Self {
+        let options = labels
+            .iter()
+            .map(|label| ChoiceOption {
+                label,
+                apply: Rc::new(|_: &mut S| {}),
+                value: toml_edit::Value::from(*label),
+            })
+            .collect();
+        Self::new(
+            key,
+            label,
+            Editor::Choice {
+                current: Rc::new(current),
+                options,
+                commit: Some(Rc::new(commit)),
+            },
+        )
+    }
+
+    /// Pick option `ix` of a choice: through the preset's `commit`, or by
+    /// writing the field's own key.
+    pub fn choose(&self, path: &ConfigPath<S>, ix: usize, cx: &mut App) {
+        let Editor::Choice {
+            options, commit, ..
+        } = &self.editor
+        else {
+            return;
+        };
+        match commit {
+            Some(commit) => commit(path, ix, cx),
+            None => {
+                let Some(option) = options.get(ix) else {
+                    return;
+                };
+                let apply = option.apply.clone();
+                path.write(self, |s| apply(s), cx);
+            }
+        }
     }
 
     /// A child struct with its own `Editable` impl.
@@ -519,7 +589,9 @@ impl<S: Editable> Field<S> {
             Editor::Toggle(lens) => Some((lens.to_toml)(section)),
             Editor::Number { lens, .. } => Some((lens.to_toml)(section)),
             Editor::Text { lens, .. } => Some((lens.to_toml)(section)),
-            Editor::Choice { current, options } => {
+            Editor::Choice {
+                current, options, ..
+            } => {
                 options.get(current(section)).map(|o| o.value.clone())
             }
             Editor::Nested { .. } | Editor::Custom { .. } | Editor::Bundle(_) => None,
@@ -548,10 +620,11 @@ impl<S: Editable> Field<S> {
                 }
             }
             Editor::Text { lens, .. } => (lens.get)(section),
-            Editor::Choice { current, options } => options
+            Editor::Choice {
+                current, options, ..
+            } => options
                 .get(current(section))
-                .map(|o| o.label.to_string())
-                .unwrap_or_default(),
+                .map_or_else(|| "Custom".to_string(), |o| o.label.to_string()),
             Editor::Nested { summary, .. } => summary(section),
             Editor::Custom { .. } => String::new(),
             Editor::Bundle(fields) => summarize(fields, section),
@@ -581,7 +654,9 @@ impl<S: Editable> Field<S> {
             Editor::Toggle(lens) => (lens.reset)(section),
             Editor::Number { lens, .. } => (lens.reset)(section),
             Editor::Text { lens, .. } => (lens.reset)(section),
-            Editor::Choice { current, options } => {
+            Editor::Choice {
+                current, options, ..
+            } => {
                 if let Some(option) = options.get(current(&S::default())) {
                     (option.apply)(section);
                 }

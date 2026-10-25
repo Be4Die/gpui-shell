@@ -231,6 +231,9 @@ impl Render for ControlCenter {
                     .child(
                         div()
                             .flex_1()
+                            // Shrinkable, so a long status line truncates
+                            // instead of pushing the buttons off the panel.
+                            .min_w(px(0.))
                             .flex()
                             .items_center()
                             .gap(Spacing::Medium.pixels())
@@ -240,6 +243,7 @@ impl Render for ControlCenter {
                             .child(
                                 div()
                                     .flex_1()
+                                    .min_w(px(0.))
                                     .flex()
                                     .items_center()
                                     .gap(Spacing::Medium.pixels())
@@ -252,6 +256,7 @@ impl Render for ControlCenter {
                                         div()
                                             .flex()
                                             .flex_col()
+                                            .min_w(px(0.))
                                             .gap(px(2.))
                                             .child(
                                                 div()
@@ -263,6 +268,7 @@ impl Render for ControlCenter {
                                                 div()
                                                     .text_size(TextSize::XSmall.rems())
                                                     .text_color(text_muted)
+                                                    .truncate()
                                                     .child(battery_sub),
                                             ),
                                     ),
@@ -271,6 +277,7 @@ impl Render for ControlCenter {
                                 el.child(
                                     div()
                                         .id("charge-limit-toggle")
+                                        .flex_none()
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -305,6 +312,7 @@ impl Render for ControlCenter {
                             .child(
                                 div()
                                     .id("power-profile-cycle")
+                                    .flex_none()
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -329,6 +337,7 @@ impl Render for ControlCenter {
                     .child(
                         div()
                             .id("config-button")
+                            .flex_none()
                             .w(px(36.))
                             .h(px(36.))
                             .rounded(Radius::Full.pixels())
@@ -352,6 +361,7 @@ impl Render for ControlCenter {
                     .child(
                         div()
                             .id("power-button")
+                            .flex_none()
                             .w(px(36.))
                             .h(px(36.))
                             .rounded(Radius::Full.pixels())

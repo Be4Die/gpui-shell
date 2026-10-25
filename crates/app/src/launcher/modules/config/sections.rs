@@ -9,7 +9,8 @@ use super::config::ConfigEditorConfig;
 use super::dock_preview::dock_preview;
 use super::launcher_preview::launcher_preview;
 use super::layout_page::LayoutPage;
-use super::look_page::LookPage;
+use super::look_preset::{apply_look, look_preview};
+use crate::bar::look::Look;
 use super::notification_preview::notification_preview;
 use super::osd_preview::osd_preview;
 use super::schema::{ConfigPath, Editable, Field, Group, TextHint, flatten, lens};
@@ -68,14 +69,7 @@ impl Editable for Config {
             Group::new(
                 "",
                 vec![
-                    Field::custom("look", "Look", |path: ConfigPath<Self>, cx: &mut App| {
-                        LookPage::open(
-                            path.then("bar", |c: &Self| &c.bar, |c: &mut Self| &mut c.bar),
-                            cx,
-                        )
-                    })
-                    .icon(IconName::Sparkles)
-                    .describe("Blocky, rounded or floating: one preset for the whole bar"),
+                    look_field(|c: &Self| &c.bar, |c: &mut Self| &mut c.bar),
                     Field::nested("bar", "Bar", |c: &Self| &c.bar, |c: &mut Self| &mut c.bar)
                         .icon(IconName::Layout)
                         .describe("Size, position, style and widgets"),
@@ -148,6 +142,37 @@ impl Editable for Config {
     }
 }
 
+/// The Look preset row, for any section `S` that can reach the bar config:
+/// Blocky / Rounded / Floating buttons, "Custom" when none matches, a
+/// miniature of each in the detail pane.
+fn look_field<S: Editable>(
+    get: fn(&S) -> &BarConfig,
+    get_mut: fn(&mut S) -> &mut BarConfig,
+) -> Field<S> {
+    let labels: Vec<&'static str> = Look::ALL.iter().map(|look| look.label()).collect();
+    Field::presets(
+        "look",
+        "Look",
+        &labels,
+        move |s: &S| {
+            Look::current(get(s), ui::radius_scale())
+                .and_then(|look| Look::ALL.iter().position(|l| *l == look))
+                .unwrap_or(Look::ALL.len())
+        },
+        move |path: &ConfigPath<S>, ix, cx| {
+            if let Some(look) = Look::ALL.get(ix) {
+                apply_look(*look, &path.then("bar", get, get_mut), cx);
+            }
+        },
+    )
+    .icon(IconName::Sparkles)
+    .describe(
+        "Blocky, rounded or floating: one preset for the bar's style, borders, chrome and \
+         corner radius. Widgets and their order are kept",
+    )
+    .preview(move |path: &ConfigPath<S>, cx: &App| look_preview(&path.then("bar", get, get_mut), cx))
+}
+
 impl Editable for BarConfig {
     fn title() -> &'static str {
         "Bar"
@@ -159,14 +184,7 @@ impl Editable for BarConfig {
 
     fn groups() -> Vec<Group<Self>> {
         vec![
-            Group::new(
-                "Look",
-                vec![
-                    Field::custom("look", "Look", LookPage::open)
-                        .icon(IconName::Sparkles)
-                        .describe("Blocky, rounded or floating; sets the keys below in one go"),
-                ],
-            ),
+            Group::new("Look", vec![look_field(|c: &Self| c, |c: &mut Self| c)]),
             Group::new(
                 "Widgets",
                 vec![
@@ -1009,8 +1027,11 @@ mod tests {
             })
             .collect();
         for field in fields {
-            // A custom page writes its own keys; `key` only names the row.
-            if matches!(field.editor, Editor::Custom { .. }) {
+            // A custom page or a preset writes its own keys; `key` only names the row.
+            if matches!(
+                field.editor,
+                Editor::Custom { .. } | Editor::Choice { commit: Some(_), .. }
+            ) {
                 continue;
             }
             let mut sample = S::default();

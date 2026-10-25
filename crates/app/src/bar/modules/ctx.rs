@@ -220,6 +220,10 @@ impl BarCtx {
             chip
         };
         let mut metrics = BarMetrics::derive(&rhythm, vertical, chip_radius, theme);
+        if bar.style == BarStyle::Bubbles && !bar.widget_stretch {
+            // Inside a pill the cells are pills too (square at scale 0).
+            metrics.cell.radius = Radius::Full.pixels().min(metrics.cell.height / 2.);
+        }
         if bar.widget_stretch {
             // Square cells as tall as the segment, a hairline apart so two
             // occupied neighbours do not fuse into one block.
@@ -408,6 +412,8 @@ mod tests {
         assert_eq!(bubbles.chip.single.thickness, Some(px(24.)));
         assert_eq!(bubbles.chip.single.padding_main, bubbles.rhythm.unit);
         assert_eq!(attached.chip.single.padding_main, px(8.));
+        // Cells in a pill are pills; at scale 0 they would be square.
+        assert_eq!(bubbles.metrics.cell.radius, bubbles.metrics.cell.height / 2.);
 
         let tiny = BarCtx::new(
             &BarConfig {
