@@ -109,6 +109,18 @@ mod tests {
         assert_eq!(rounded.padding, None);
     }
 
+    /// Out of the box the shell is in the floating look, so the chooser
+    /// marks it and the stock config needs no `[bar]` keys for it.
+    #[test]
+    fn the_default_config_is_the_floating_look() {
+        let bar = BarConfig::default();
+        assert_eq!(bar.style, BarStyle::Floating);
+        assert_eq!(
+            Look::current(&bar, ui::Theme::DEFAULT_RADIUS_SCALE),
+            Some(Look::Floating)
+        );
+    }
+
     /// A preset never touches what the user placed in the bar.
     #[test]
     fn presets_leave_widgets_alone() {

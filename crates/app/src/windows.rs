@@ -58,22 +58,14 @@ impl<T: Styled> ShellPanel for T {
 /// How a panel window is sized.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PanelSize {
-    Fixed {
-        width: f32,
-        height: f32,
-    },
     /// Height follows the content, capped at `max_height` and the output.
-    FitHeight {
-        width: f32,
-        max_height: f32,
-    },
+    FitHeight { width: f32, max_height: f32 },
 }
 
 impl PanelSize {
     /// The size the window opens at: a fitted panel's cap.
     pub fn initial(&self) -> Size<Pixels> {
         match self {
-            PanelSize::Fixed { width, height } => size(px(*width), px(*height)),
             PanelSize::FitHeight { width, max_height } => size(px(*width), px(*max_height)),
         }
     }
@@ -356,7 +348,6 @@ pub struct PanelHost<V: Render> {
 impl<V: Render> Render for PanelHost<V> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let paint = match self.size {
-            PanelSize::Fixed { .. } => true,
             PanelSize::FitHeight { width, max_height } => self.fit.fit_height(
                 window,
                 cx,

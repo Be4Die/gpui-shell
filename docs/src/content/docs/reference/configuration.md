@@ -15,7 +15,7 @@ If the file does not exist, it is created with defaults on startup. Changes are 
 ```toml
 [bar]
 size = 32.0
-position = "left"
+position = "top"
 start = ["LauncherBtn", "Workspaces", "SysInfo"]
 center = ["ActiveWindow"]
 end = ["Clock", "Mpris", "Notifications", "Systray", "KeyboardLayout", "Settings"]
@@ -45,6 +45,25 @@ reboot = "systemctl reboot"
 poweroff = "systemctl poweroff"
 ```
 
+## Frame
+
+The `[frame]` section draws a band around the work area with rounded inner
+corners. An attached bar and a taskbar dock (`style = "attached"`,
+`stretch = true`, `reserve_space = true`) become sides of the frame, as deep
+as they are; a floating bar or dock sits inside it. Windows are kept inside
+the frame.
+
+```toml
+[frame]
+enabled = true
+thickness = 6.0     # width of the band on the edges nothing sits on
+# radius = 16.0     # inner corner radius; unset, it follows the theme's radius_scale
+# opacity = 0.9     # unset, the band matches the bar's background
+```
+
+`bar.style = "frame"` is the old spelling of an attached bar with the frame
+on, with the geometry under `[bar.frame]`; it still works.
+
 ## Dock
 
 The `[dock]` section configures the pinned and running application dock.
@@ -52,6 +71,11 @@ The `[dock]` section configures the pinned and running application dock.
 ```toml
 [dock]
 position = "bottom"       # "top", "bottom", "left", or "right"
+style = "floating"        # "floating" (inset, rounded) or "attached" (flush to the edge)
+stretch = false           # true spans the whole edge
+align = "center"          # "start", "center" or "end": where the icons sit along the edge
+launcher = false          # true adds a button at the start that opens the launcher
+reserve_space = false     # true keeps windows off the dock, like the bar; it then never hides
 monitors = "primaryonly"  # "primaryonly" or "all"
 visibility = "intelligent-hide"
 hover_effect = "lift"     # "none", "lift", "magnify", "glow", or "magnify-lift"
@@ -59,7 +83,16 @@ icon_size = 40.0
 pinned = ["firefox.desktop"]
 ```
 
-`visibility` accepts:
+`style = "attached"` with `stretch = true`, `align = "start"`, `launcher =
+true` and `reserve_space = true` is a taskbar: a strip along the edge that
+windows tile against, apps from the left, launcher first. The default is a
+floating card that fits its icons and hides when it is in the way.
+
+Right-click an icon for its menu: a new window, the app's open windows to
+jump to, pin or unpin, and close. Pinning from the menu writes `state.toml`,
+which overrides `pinned` here.
+
+`visibility` accepts (ignored while `reserve_space` is on):
 
 - `"always-visible"`: the dock never hides.
 - `"intelligent-hide"` (default): the dock hides when focus leaves its monitor and reappears at its edge.

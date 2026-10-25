@@ -10,6 +10,7 @@ mod choice_page;
 #[allow(clippy::module_inception)]
 pub mod config;
 mod dock_preview;
+mod frame_preview;
 mod launcher_preview;
 mod layout_page;
 mod look_preset;

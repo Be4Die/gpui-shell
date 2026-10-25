@@ -7,25 +7,26 @@ use ui::IconName;
 use super::bar_preview::bar_preview;
 use super::config::ConfigEditorConfig;
 use super::dock_preview::dock_preview;
+use super::frame_preview::frame_preview;
 use super::launcher_preview::launcher_preview;
 use super::layout_page::LayoutPage;
 use super::look_preset::{apply_look, look_preview};
-use crate::bar::look::Look;
 use super::notification_preview::notification_preview;
 use super::osd_preview::osd_preview;
 use super::schema::{ConfigPath, Editable, Field, Group, TextHint, flatten, lens};
-use crate::bar::config::{
-    BarConfig, BarFloatingConfig, BarFrameConfig, BarPosition, BarSegmentsConfig, BarStyle,
-};
+use crate::bar::config::{BarConfig, BarFloatingConfig, BarPosition, BarSegmentsConfig, BarStyle};
+use crate::bar::look::Look;
 use crate::bar::modules::{
     self as bar_widgets, ActiveWindowConfig, BarWidgetMeta, BatteryConfig, ClockConfig,
     KeyboardLayoutConfig, MprisConfig as BarMprisConfig, SysInfoConfig as BarSysInfoConfig,
     TrayConfig, WorkspacesConfig as BarWorkspacesConfig,
 };
 use crate::config::ActiveConfig;
-use crate::config::Config;
+use crate::config::{Config, FrameConfig};
 use crate::control_center::ControlCenterConfig;
-use crate::dock::config::{DockConfig, DockHoverEffect, DockMonitors, DockVisibility};
+use crate::dock::config::{
+    DockAlign, DockConfig, DockHoverEffect, DockMonitors, DockStyle, DockVisibility,
+};
 use crate::launcher::action::{Action, Outcome};
 use crate::launcher::config::{LauncherConfig, ModulesConfig as LauncherModulesConfig};
 use crate::launcher::content::Item;
@@ -88,7 +89,15 @@ impl Editable for Config {
                         |c: &mut Self| &mut c.dock,
                     )
                     .icon(IconName::Layers)
-                    .describe("Position, visibility and hover effect"),
+                    .describe("Position, shape, visibility and hover effect"),
+                    Field::nested(
+                        "frame",
+                        "Frame",
+                        |c: &Self| &c.frame,
+                        |c: &mut Self| &mut c.frame,
+                    )
+                    .icon(IconName::Square)
+                    .describe("A band around the screen the bar and dock can be sides of"),
                     Field::nested(
                         "notification",
                         "Notifications",
@@ -170,7 +179,9 @@ fn look_field<S: Editable>(
         "Blocky, rounded or floating: one preset for the bar's style, borders, chrome and \
          corner radius. Widgets and their order are kept",
     )
-    .preview(move |path: &ConfigPath<S>, cx: &App| look_preview(&path.then("bar", get, get_mut), cx))
+    .preview(move |path: &ConfigPath<S>, cx: &App| {
+        look_preview(&path.then("bar", get, get_mut), cx)
+    })
 }
 
 impl Editable for BarConfig {
@@ -220,7 +231,10 @@ impl Editable for BarConfig {
                                 &BarStyle::ALL,
                                 BarStyle::label,
                             )
-                            .describe("Attached to the edge, floating, a screen frame, or bubbles"),
+                            .describe(
+                                "Attached to the edge, floating, or bubbles. An attached bar \
+                                 becomes a side of the frame when that is on",
+                            ),
                         ],
                     )
                     .icon(IconName::Layout)
@@ -275,15 +289,45 @@ impl Editable for BarConfig {
                         |c: &mut Self| &mut c.floating,
                     )
                     .describe("Gap and radius when the style is floating"),
-                    Field::nested(
-                        "frame",
-                        "Frame",
-                        |c: &Self| &c.frame,
-                        |c: &mut Self| &mut c.frame,
-                    )
-                    .describe("Thickness and radius when the style is frame"),
                 ],
             ),
+        ]
+    }
+}
+
+impl Editable for FrameConfig {
+    fn title() -> &'static str {
+        "Frame"
+    }
+
+    fn fields() -> Vec<Field<Self>> {
+        vec![
+            Field::bundle(
+                "shape",
+                "Shape",
+                vec![
+                    Field::toggle("enabled", "Enabled", lens!(enabled)).describe(
+                        "A band around the work area. An attached bar and a taskbar dock \
+                         become its sides; a floating bar or dock sits inside it",
+                    ),
+                    Field::number("thickness", "Thickness", lens!(thickness as f64))
+                        .range(0.0, 32.0)
+                        .unit("px")
+                        .describe("Width of the band on the edges nothing sits on"),
+                    Field::number(
+                        "radius",
+                        "Corner radius",
+                        lens!(radius or f64::from(FrameConfig::RADIUS.base())),
+                    )
+                    .range(0.0, 48.0)
+                    .unit("px")
+                    .describe(RADIUS_FOLLOWS_THEME),
+                ],
+            )
+            .icon(IconName::Square)
+            .preview(frame_preview),
+            opacity_field("Opacity", lens!(opacity or 1.0))
+                .describe("Unset, the band matches the bar's background"),
         ]
     }
 }
@@ -294,8 +338,7 @@ impl Editable for BarSegmentsConfig {
     }
 
     fn fields() -> Vec<Field<Self>> {
-        const PER_STYLE: &str =
-            "Unset: 6 / 3 / 4 px with bubbles, 0 with every other style. Reset to default to \
+        const PER_STYLE: &str = "Unset: 6 / 3 / 4 px with bubbles, 0 with every other style. Reset to default to \
              follow the style again";
         vec![
             Field::number("gap", "Gap", lens!(gap or 0.0))
@@ -349,29 +392,6 @@ fn opacity_field<S: Editable>(label: &'static str, lens: super::schema::Lens<S, 
         .range(0.0, 1.0)
         .step(0.05)
         .describe(OPACITY_FOLLOWS_THEME)
-}
-
-impl Editable for BarFrameConfig {
-    fn title() -> &'static str {
-        "Frame bar"
-    }
-
-    fn fields() -> Vec<Field<Self>> {
-        vec![
-            Field::number("thickness", "Thickness", lens!(thickness as f64))
-                .range(0.0, 32.0)
-                .unit("px")
-                .describe("Width of the three edges the bar is not on"),
-            Field::number(
-                "radius",
-                "Inner radius",
-                lens!(radius or f64::from(BarFrameConfig::RADIUS.base())),
-            )
-            .range(0.0, 48.0)
-            .unit("px")
-            .describe(RADIUS_FOLLOWS_THEME),
-        ]
-    }
 }
 
 /// The settings of one bar widget, if it has any; keyed by the widget's
@@ -949,12 +969,37 @@ impl Editable for DockConfig {
                         BarPosition::label,
                     ),
                     Field::choice(
+                        "style",
+                        "Style",
+                        lens!(style),
+                        &DockStyle::ALL,
+                        DockStyle::label,
+                    )
+                    .describe("Floating off the edge like a card, or attached flush to it"),
+                    Field::toggle("stretch", "Stretch", lens!(stretch))
+                        .describe("Span the whole edge"),
+                    Field::choice(
+                        "align",
+                        "Align",
+                        lens!(align),
+                        &DockAlign::ALL,
+                        DockAlign::label,
+                    )
+                    .describe("Where the icons sit along the edge"),
+                    Field::toggle("launcher", "Launcher", lens!(launcher))
+                        .describe("A button at the start of the dock that opens the launcher"),
+                    Field::toggle("reserve_space", "Reserve", lens!(reserve_space)).describe(
+                        "Reserve the dock's space so windows stay off it, as they do the bar. \
+                         A reserved dock never hides",
+                    ),
+                    Field::choice(
                         "visibility",
                         "Visibility",
                         lens!(visibility),
                         &DockVisibility::ALL,
                         DockVisibility::label,
-                    ),
+                    )
+                    .describe("Ignored while the dock reserves its space"),
                     Field::choice(
                         "hover_effect",
                         "Hover effect",
@@ -1010,8 +1055,7 @@ mod tests {
         use super::super::schema::Editor;
 
         fn has_key(section: &impl serde::Serialize, key: &str) -> bool {
-            let table: toml::Table =
-                toml::from_str(&toml::to_string(section).unwrap()).unwrap();
+            let table: toml::Table = toml::from_str(&toml::to_string(section).unwrap()).unwrap();
             let mut node = Some(&toml::Value::Table(table));
             for segment in key.split('.') {
                 node = node.and_then(|v| v.get(segment));
@@ -1030,7 +1074,11 @@ mod tests {
             // A custom page or a preset writes its own keys; `key` only names the row.
             if matches!(
                 field.editor,
-                Editor::Custom { .. } | Editor::Choice { commit: Some(_), .. }
+                Editor::Custom { .. }
+                    | Editor::Choice {
+                        commit: Some(_),
+                        ..
+                    }
             ) {
                 continue;
             }
@@ -1057,7 +1105,7 @@ mod tests {
         keys_resolve::<Config>();
         keys_resolve::<BarConfig>();
         keys_resolve::<BarFloatingConfig>();
-        keys_resolve::<BarFrameConfig>();
+        keys_resolve::<FrameConfig>();
         keys_resolve::<BarSegmentsConfig>();
         keys_resolve::<crate::bar::config::ModulesConfig>();
         keys_resolve::<ClockConfig>();

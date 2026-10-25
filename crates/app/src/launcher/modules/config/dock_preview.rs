@@ -9,9 +9,9 @@ use super::bar_preview::bar_zone;
 use super::preview::{frame, hit_zones, scale, screen, set_field};
 use super::schema::ConfigPath;
 use crate::bar::config::BarPosition;
-use crate::dock::config::{DockConfig, DockHoverEffect, DockVisibility};
+use crate::dock::config::{DockAlign, DockConfig, DockHoverEffect, DockStyle, DockVisibility};
 
-/// How far the dock floats off the screen edge.
+/// How far a floating dock floats off the screen edge.
 const EDGE_GAP: f32 = 3.;
 /// How far a lifted icon rises; a quarter of the real 8px lift is invisible.
 const LIFT: f32 = 3.;
@@ -27,18 +27,41 @@ pub fn dock_preview(path: &ConfigPath<DockConfig>, cx: &App) -> AnyElement {
     let position = dock.position;
     let icon = scale(dock.icon_size, 5., 14.);
 
+    let gap = match dock.style {
+        DockStyle::Floating => EDGE_GAP,
+        DockStyle::Attached => 0.,
+    };
+    // Dock thickness in preview pixels: icon, strip padding and gap.
+    let thickness = f32::from(icon) + 2. * 2. + gap;
+
     let mut screen = screen(cx);
-    if dock.visibility == DockVisibility::DodgeWindows {
-        screen = screen.child(covering_window(position, cx));
+    if dock.reserve_space {
+        // Windows stop short of a reserved dock.
+        screen = screen.child(window_near_edge(position, px(thickness + 3.), cx));
+    } else if dock.visibility == DockVisibility::DodgeWindows {
+        screen = screen.child(window_near_edge(position, px(2.), cx));
     }
 
+    // The launcher button leads: a ring where the app dots are discs.
+    let launcher = dock.launcher.then(|| {
+        div()
+            .flex_none()
+            .rounded(Radius::Full.pixels())
+            .size(icon)
+            .border_1()
+            .border_color(colors.accent)
+    });
     let icons = (0..ICONS).map(|ix| {
         let hovered = ix == HOVERED;
         let mut dot = div()
             .flex_none()
             .rounded(Radius::Full.pixels())
             .size(icon)
-            .bg(if hovered { colors.accent } else { colors.accent.fade(Opacity::Soft) });
+            .bg(if hovered {
+                colors.accent
+            } else {
+                colors.accent.fade(Opacity::Soft)
+            });
         if hovered {
             let effect = dock.hover_effect;
             if matches!(
@@ -67,13 +90,13 @@ pub fn dock_preview(path: &ConfigPath<DockConfig>, cx: &App) -> AnyElement {
         }
         dot
     });
+    let radius = Radius::Small.pixels();
     let strip = div()
         .flex()
         .items_center()
+        .justify_center()
         .gap(px(2.))
         .p(px(2.))
-        .rounded(Radius::Small.pixels())
-        .border_1()
         .border_color(colors.border)
         .bg(colors.element_background)
         .map(|strip| {
@@ -83,15 +106,42 @@ pub fn dock_preview(path: &ConfigPath<DockConfig>, cx: &App) -> AnyElement {
                 strip
             }
         })
+        .map(|strip| match (dock.style, dock.stretch) {
+            (DockStyle::Floating, _) => strip.rounded(radius).border_1(),
+            // Flush to the edge: round and outline only what faces the screen.
+            (DockStyle::Attached, stretched) => match position {
+                BarPosition::Top => strip.border_b_1().when(!stretched, |s| {
+                    s.rounded_b(radius).border_l_1().border_r_1()
+                }),
+                BarPosition::Bottom => strip.border_t_1().when(!stretched, |s| {
+                    s.rounded_t(radius).border_l_1().border_r_1()
+                }),
+                BarPosition::Left => strip.border_r_1().when(!stretched, |s| {
+                    s.rounded_r(radius).border_t_1().border_b_1()
+                }),
+                BarPosition::Right => strip.border_l_1().when(!stretched, |s| {
+                    s.rounded_l(radius).border_t_1().border_b_1()
+                }),
+            },
+        })
+        .when(dock.stretch && position.is_vertical(), |strip| {
+            strip.h_full()
+        })
+        .when(dock.stretch && !position.is_vertical(), |strip| {
+            strip.w_full()
+        })
+        .map(|strip| justify(strip, dock.align))
+        .children(launcher)
         .children(icons);
     let dock_layer = along_edge(
-        div().absolute().flex().justify_center(),
+        justify(div().absolute().flex(), dock.align),
         position,
-        px(EDGE_GAP),
+        px(gap),
     )
-    .when(dock.visibility != DockVisibility::AlwaysVisible, |layer| {
-        layer.opacity(HIDDEN_OPACITY.value())
-    })
+    .when(
+        dock.effective_visibility() != DockVisibility::AlwaysVisible,
+        |layer| layer.opacity(HIDDEN_OPACITY.value()),
+    )
     .child(strip);
     screen = screen.child(dock_layer);
 
@@ -114,19 +164,32 @@ pub fn dock_preview(path: &ConfigPath<DockConfig>, cx: &App) -> AnyElement {
         cx,
     );
 
+    let shape = match (dock.style, dock.stretch) {
+        (style, false) => style.label().to_string(),
+        (style, true) => format!("{}, stretched", style.label()),
+    };
+    let behaviour = if dock.reserve_space {
+        "Reserves its space"
+    } else {
+        dock.visibility.label()
+    };
     frame(
         screen,
-        format!(
-            "{} · {} · {}",
-            position.label(),
-            dock.visibility.label(),
-            dock.hover_effect.label()
-        ),
+        format!("{} · {shape} · {behaviour}", position.label()),
     )
 }
 
-/// Stretch `layer` along `position`'s edge, `offset` in from it, so a
-/// centred child sits mid-edge.
+/// Pack a row's children where `align` puts them along the edge.
+fn justify(row: Div, align: DockAlign) -> Div {
+    match align {
+        DockAlign::Start => row.justify_start(),
+        DockAlign::Center => row.justify_center(),
+        DockAlign::End => row.justify_end(),
+    }
+}
+
+/// Stretch `layer` along `position`'s edge, `offset` in from it, so its
+/// children sit along the edge as justified.
 fn along_edge(layer: Div, position: BarPosition, offset: Pixels) -> Div {
     match position {
         BarPosition::Left => layer.top_0().bottom_0().left(offset).flex_col(),
@@ -136,11 +199,12 @@ fn along_edge(layer: Div, position: BarPosition, offset: Pixels) -> Div {
     }
 }
 
-/// A window reaching over the dock's edge: the reason a dodging dock hides.
-fn covering_window(position: BarPosition, cx: &App) -> impl IntoElement {
+/// A window whose side towards the dock's edge stops `near` from it: over
+/// the dock, it is the reason a dodging dock hides; short of it, what a
+/// reserved dock keeps windows to.
+fn window_near_edge(position: BarPosition, near: Pixels, cx: &App) -> impl IntoElement {
     let colors = cx.theme().colors();
     let far = px(22.);
-    let near = px(2.);
     div()
         .absolute()
         .rounded(Radius::Small.pixels())

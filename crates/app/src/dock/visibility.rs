@@ -1,7 +1,7 @@
 use gpui::{App, Bounds, DisplayId, Size, point, px};
-use ui::Spacing;
 
 use super::DOCK_HIDDEN_STRIP_SIZE;
+use super::config::DockGeometry;
 
 pub(super) fn monitor_name_for_display(
     display_id: Option<DisplayId>,
@@ -41,7 +41,7 @@ pub(super) fn geometry_overlaps_dock(
 /// Where the dock sits, in the logical layout space window geometry uses.
 /// Monitors report physical pixels, so their size is scaled down.
 pub(super) fn dock_bounds_in_compositor_space(
-    position: crate::bar::config::BarPosition,
+    geometry: DockGeometry,
     dock_size: Size<gpui::Pixels>,
     monitor: &services::Monitor,
 ) -> Bounds<gpui::Pixels> {
@@ -54,22 +54,23 @@ pub(super) fn dock_bounds_in_compositor_space(
     let monitor_height = monitor.height as f32 / scale;
     let dock_width: f32 = dock_size.width.into();
     let dock_height: f32 = dock_size.height.into();
-    let (x, y) = match position {
+    let gap = geometry.gap;
+    let (x, y) = match geometry.position {
         crate::bar::config::BarPosition::Top => (
-            monitor.x as f32 + (monitor_width - dock_width).max(0.0) / 2.0,
-            monitor.y as f32 + Spacing::Medium.value(),
+            monitor.x as f32 + geometry.along(monitor_width, dock_width),
+            monitor.y as f32 + gap,
         ),
         crate::bar::config::BarPosition::Bottom => (
-            monitor.x as f32 + (monitor_width - dock_width).max(0.0) / 2.0,
-            monitor.y as f32 + monitor_height - dock_height - Spacing::Medium.value(),
+            monitor.x as f32 + geometry.along(monitor_width, dock_width),
+            monitor.y as f32 + monitor_height - dock_height - gap,
         ),
         crate::bar::config::BarPosition::Left => (
-            monitor.x as f32 + Spacing::Medium.value(),
-            monitor.y as f32 + (monitor_height - dock_height).max(0.0) / 2.0,
+            monitor.x as f32 + gap,
+            monitor.y as f32 + geometry.along(monitor_height, dock_height),
         ),
         crate::bar::config::BarPosition::Right => (
-            monitor.x as f32 + monitor_width - dock_width - Spacing::Medium.value(),
-            monitor.y as f32 + (monitor_height - dock_height).max(0.0) / 2.0,
+            monitor.x as f32 + monitor_width - dock_width - gap,
+            monitor.y as f32 + geometry.along(monitor_height, dock_height),
         ),
     };
 
@@ -140,13 +141,13 @@ pub(super) fn initial_hide_action(
 pub(super) fn dodge_windows_hide_behavior(
     windows: &[services::Window],
     monitor: Option<&services::Monitor>,
-    position: crate::bar::config::BarPosition,
+    geometry: DockGeometry,
     dock_size: Size<gpui::Pixels>,
 ) -> DockHideBehavior {
     let Some(monitor) = monitor else {
         return DockHideBehavior::Visible;
     };
-    let dock_bounds = dock_bounds_in_compositor_space(position, dock_size, monitor);
+    let dock_bounds = dock_bounds_in_compositor_space(geometry, dock_size, monitor);
     let covered = windows
         .iter()
         .filter(|window| {

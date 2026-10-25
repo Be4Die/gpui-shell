@@ -112,12 +112,15 @@ impl Render for Bar {
         }
 
         let bar = &cx.config().bar;
+        // A side of the screen frame draws no hairline of its own: the frame
+        // outlines the whole work area.
+        let framed = cx.config().screen_frame().is_some() && cx.config().bar_is_frame_side();
         let shape = match bar.style {
-            BarStyle::Attached | BarStyle::Bubbles => BarShape::Attached,
+            BarStyle::Attached | BarStyle::Frame if framed => BarShape::Framed,
+            BarStyle::Attached | BarStyle::Bubbles | BarStyle::Frame => BarShape::Attached,
             BarStyle::Floating => BarShape::Floating {
                 radius: bar.floating.radius(),
             },
-            BarStyle::Frame => BarShape::Framed,
         };
 
         // With bubbles the fill and border move onto the segments.
@@ -229,9 +232,12 @@ pub fn init(cx: &mut App) {
 
         tracing::info!("Bar opened");
 
+        // Frame strips first, so a floating bar sits inside the frame; the
+        // dock last, so it sits beside the bar. See `reload`.
         cx.update(|cx| {
-            open_all_bar_windows(cx);
             crate::frame::reopen(cx);
+            open_all_bar_windows(cx);
+            crate::dock::reload(cx);
         });
 
         let mut layout = layout.skip(1);
@@ -278,6 +284,10 @@ fn open_all_bar_windows(cx: &mut App) -> usize {
 }
 
 /// Rebuild all bar windows using the latest config.
+/// Reopen the shell's edge windows in layout order. Compositors hand out
+/// exclusive zones in creation order (niri) or by layer (Hyprland), so the
+/// frame's strips go first, then the bar, then the dock: each is laid out
+/// inside what came before it.
 pub fn reload(cx: &mut App) {
     let old_windows: Vec<_> = cx
         .windows()
@@ -285,6 +295,7 @@ pub fn reload(cx: &mut App) {
         .filter(|h| h.downcast::<Bar>().is_some())
         .collect();
 
+    crate::frame::reopen(cx);
     let opened = open_all_bar_windows(cx);
     if opened == 0 {
         tracing::warn!("Bar reload skipped closing old windows because no new bar window opened");
@@ -294,5 +305,5 @@ pub fn reload(cx: &mut App) {
     for handle in old_windows {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
     }
-    crate::frame::reopen(cx);
+    crate::dock::reload(cx);
 }

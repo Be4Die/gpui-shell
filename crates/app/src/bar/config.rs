@@ -12,11 +12,11 @@ use super::modules::{
 #[serde(rename_all = "lowercase")]
 pub enum BarPosition {
     /// Left edge of the screen.
-    #[default]
     Left,
     /// Right edge of the screen.
     Right,
     /// Top edge of the screen.
+    #[default]
     Top,
     /// Bottom edge of the screen.
     Bottom,
@@ -57,12 +57,13 @@ impl BarPosition {
 #[serde(rename_all = "lowercase")]
 pub enum BarStyle {
     /// Flush against the screen edge.
-    #[default]
     Attached,
-    /// Inset from the screen edges with rounded corners (see `bar.floating`).
+    /// Inset from the screen edges with rounded corners (see `bar.floating`);
+    /// the stock look.
+    #[default]
     Floating,
-    /// One side of a frame around the screen with rounded inner corners
-    /// (see `bar.frame`).
+    /// The old spelling of an attached bar with `[frame]` enabled, its
+    /// geometry under `bar.frame`. Still read; not offered.
     Frame,
     /// A transparent bar where each entry of `start`, `center` and `end` is
     /// its own pill. A nested list (`["Clock", "Notifications"]`) shares one.
@@ -70,7 +71,7 @@ pub enum BarStyle {
 }
 
 impl BarStyle {
-    pub const ALL: [Self; 4] = [Self::Attached, Self::Floating, Self::Frame, Self::Bubbles];
+    pub const ALL: [Self; 3] = [Self::Attached, Self::Floating, Self::Bubbles];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -288,7 +289,7 @@ impl Default for BarConfig {
         Self {
             size: 32.0,
             padding: None,
-            position: BarPosition::Left,
+            position: BarPosition::default(),
             style: BarStyle::default(),
             opacity: None,
             floating: BarFloatingConfig::default(),
@@ -483,6 +484,7 @@ mod tests {
     #[test]
     fn segment_thickness_subtracts_border_and_inset() {
         let attached = BarConfig {
+            style: BarStyle::Attached,
             position: BarPosition::Top,
             size: 32.0,
             ..Default::default()
@@ -556,11 +558,16 @@ mod tests {
         assert_eq!(rounded.end[2].names().len(), 2);
     }
 
+    /// `Frame` is read for old files but no longer offered: the frame is
+    /// its own section.
     #[test]
     fn position_and_style_catalogues_are_complete() {
         assert_eq!(BarPosition::ALL.len(), 4);
-        assert_eq!(BarStyle::ALL.len(), 4);
+        assert_eq!(BarStyle::ALL.len(), 3);
+        assert!(!BarStyle::ALL.contains(&BarStyle::Frame));
         assert!(BarPosition::ALL.iter().all(|p| !p.label().is_empty()));
         assert!(BarStyle::ALL.iter().all(|s| !s.label().is_empty()));
+        let legacy: BarConfig = toml::from_str("style = \"frame\"").expect("still parses");
+        assert_eq!(legacy.style, BarStyle::Frame);
     }
 }

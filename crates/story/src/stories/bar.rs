@@ -7,7 +7,7 @@
 //! blocky (square, flush, full-height) and rounded (pills with gaps) - one
 //! model, two configs.
 
-use gpui::{AnyElement, Hsla, Pixels, div};
+use gpui::{AnyElement, Bounds, Edges, Hsla, Pixels, div, point, size};
 use ui::patterns::{
     BarChip, BarEdge, BarRhythm, BarSegment, BarShape, BarSurface, ChipGeometry, ScreenFrame,
 };
@@ -89,9 +89,7 @@ fn group(icons: &[IconName], vertical: bool, cx: &App) -> AnyElement {
 
 /// An invisible segment: what every style but bubbles wraps its entries in.
 fn flush(widgets: impl IntoIterator<Item = AnyElement>) -> AnyElement {
-    BarSegment::new(false)
-        .children(widgets)
-        .into_any_element()
+    BarSegment::new(false).children(widgets).into_any_element()
 }
 
 fn horizontal_bar(cx: &App) -> AnyElement {
@@ -201,14 +199,23 @@ fn framed_screen(cx: &App) -> AnyElement {
         .bg(colors.surface_background)
         .child(
             div().absolute().size_full().child(
-                ScreenFrame::new(BarEdge::Top, BAR, cx.theme().surface(None))
-                    .thickness(px(6.))
+                // The bar is the top side; it is laid out inside the two
+                // side bands, so the frame paints the corners under it.
+                ScreenFrame::new(cx.theme().surface(None))
+                    .depths(Edges {
+                        top: BAR,
+                        ..Edges::all(px(6.))
+                    })
+                    .cutouts(vec![Bounds::new(
+                        point(px(6.), px(0.)),
+                        size(px(480. - 12.), BAR),
+                    )])
                     .radius(Radius::XXLarge.pixels())
                     .border(Some(colors.border)),
             ),
         )
         .child(
-            div().absolute().w_full().h(BAR).child(
+            div().absolute().left(px(6.)).right(px(6.)).h(BAR).child(
                 BarSurface::new(BarEdge::Top)
                     .shape(BarShape::Framed)
                     .padding(BarRhythm::derive(ChipGeometry::STANDARD_THICKNESS).unit)
@@ -287,7 +294,11 @@ fn blocky_bar(cx: &App) -> AnyElement {
             .child(cell("3", false, false))
             .child(cell("4", false, false)),
     )
-    .geometry(ChipGeometry::stretched(&rhythm, true, Radius::Large.pixels()))
+    .geometry(ChipGeometry::stretched(
+        &rhythm,
+        true,
+        Radius::Large.pixels(),
+    ))
     .into_any_element();
     let icons = |names: &[IconName]| {
         h_flex()
@@ -321,7 +332,11 @@ fn blocky_bar(cx: &App) -> AnyElement {
                     ),
                 ])])
                 .center([flush([stretched(
-                    content(IconName::Globe, "FIREFOX  gpui-shell/crates/app/src/bar", false),
+                    content(
+                        IconName::Globe,
+                        "FIREFOX  gpui-shell/crates/app/src/bar",
+                        false,
+                    ),
                     gpui::transparent_black(),
                 )])])
                 .end([
@@ -462,7 +477,11 @@ fn rounded_bar(cx: &App) -> AnyElement {
                         .child(bare(content(IconName::Battery, "99%", false)))
                         .into_any_element(),
                     pill()
-                        .child(bare(content(IconName::Calendar, "Mon 19 Oct  14:32", false)))
+                        .child(bare(content(
+                            IconName::Calendar,
+                            "Mon 19 Oct  14:32",
+                            false,
+                        )))
                         .child(
                             div()
                                 .flex()

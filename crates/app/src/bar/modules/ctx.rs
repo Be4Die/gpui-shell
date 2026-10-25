@@ -366,15 +366,15 @@ mod tests {
     }
 
     /// Only bubbles paint their segments; the rest keep them invisible so
-    /// an existing attached bar lays out exactly as before.
+    /// a floating or attached bar lays out exactly as before.
     #[test]
     fn only_bubbles_paint_segments() {
         let theme = Theme::default();
-        let attached = BarCtx::new(&BarConfig::default(), &theme);
-        assert_eq!(attached.segment.fill, None);
-        assert_eq!(attached.segment.border, None);
-        assert_eq!(attached.segment.gap, px(0.));
-        assert_eq!(attached.segment.padding, px(0.));
+        let floating = BarCtx::new(&BarConfig::default(), &theme);
+        assert_eq!(floating.segment.fill, None);
+        assert_eq!(floating.segment.border, None);
+        assert_eq!(floating.segment.gap, px(0.));
+        assert_eq!(floating.segment.padding, px(0.));
 
         let bubbles = BarCtx::new(
             &BarConfig {
@@ -413,7 +413,10 @@ mod tests {
         assert_eq!(bubbles.chip.single.padding_main, bubbles.rhythm.unit);
         assert_eq!(attached.chip.single.padding_main, px(8.));
         // Cells in a pill are pills; at scale 0 they would be square.
-        assert_eq!(bubbles.metrics.cell.radius, bubbles.metrics.cell.height / 2.);
+        assert_eq!(
+            bubbles.metrics.cell.radius,
+            bubbles.metrics.cell.height / 2.
+        );
 
         let tiny = BarCtx::new(
             &BarConfig {

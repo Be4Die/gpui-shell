@@ -100,6 +100,11 @@ pub fn execute_command(cmd: CompositorCommand) -> Result<()> {
         CompositorCommand::FocusWindow(id) => {
             format!("dispatch focusid client,{}", id)
         }
+        CompositorCommand::CloseWindow(id) => {
+            // Mango only kills the focused client, so focus it first.
+            send_command(&format!("dispatch focusid client,{}", id))?;
+            "dispatch killclient".to_string()
+        }
         CompositorCommand::Custom(action, args) => {
             if args.is_empty() {
                 format!("dispatch {}", action)

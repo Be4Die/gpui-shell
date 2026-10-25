@@ -117,6 +117,9 @@ pub enum IconSize {
     /// A caller-specified size in absolute pixels, which does *not* scale
     /// with the window's rem size.
     Exact(f32),
+    /// The whole of the parent, for an icon inside a box that is sized -
+    /// or resized on hover - by its container.
+    Fill,
 }
 
 impl IconSize {
@@ -140,10 +143,10 @@ impl IconSize {
         }
     }
 
-    /// The raw pixel count of a preset.
+    /// The raw pixel count of a preset; `Fill` has none and reads as `Medium`.
     pub const fn value(self) -> f32 {
         match self {
-            Self::Custom(_) => NOMINAL_REM_PX,
+            Self::Custom(_) | Self::Fill => NOMINAL_REM_PX,
             Self::Exact(p) => p,
             Self::Indicator => 10.0,
             Self::XSmall => 12.0,
