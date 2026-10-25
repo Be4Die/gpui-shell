@@ -18,6 +18,7 @@ use crate::windows::{PanelConfig, PanelSize, ShellWindows, panel_placement_from_
 
 mod panel;
 pub use panel::MprisPanel;
+pub(crate) use panel::tick_while_playing;
 
 /// Bar widget for media status and controls.
 pub struct Mpris {
@@ -88,12 +89,7 @@ impl Mpris {
             }
         }
 
-        player
-            .service
-            .rsplit('.')
-            .next()
-            .unwrap_or("Player")
-            .to_string()
+        player.name()
     }
 
     fn render_widget_content(

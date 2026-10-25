@@ -2,10 +2,10 @@
 
 use std::process::Command;
 
-use std::path::PathBuf;
-
 use gpui::{AnyElement, App, FontWeight, ObjectFit, SharedString, div, img, prelude::*, px};
-use ui::{ActiveTheme, Color, Icon, IconSize, Label, LabelCommon, Radius, Spacing, TextSize};
+use ui::{
+    ActiveTheme, Color, Icon, IconSize, Label, LabelCommon, Radius, Spacing, TextSize, image_source,
+};
 
 use super::content::{Detail, Metadata};
 
@@ -263,7 +263,7 @@ fn render_block(block: Block, cx: &App) -> AnyElement {
             .flex()
             .justify_center()
             .child(
-                img(expand_home(&path))
+                img(image_source(&path))
                     .max_w_full()
                     .max_h(px(IMAGE_MAX_HEIGHT))
                     .object_fit(ObjectFit::Contain),
@@ -281,13 +281,6 @@ fn render_block(block: Block, cx: &App) -> AnyElement {
             .text_color(colors.text)
             .child(text)
             .into_any_element(),
-    }
-}
-
-fn expand_home(path: &str) -> PathBuf {
-    match (path.strip_prefix("~/"), std::env::var("HOME")) {
-        (Some(rest), Ok(home)) => PathBuf::from(home).join(rest),
-        _ => PathBuf::from(path),
     }
 }
 

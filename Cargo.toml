@@ -7,6 +7,7 @@ resolver = "3"
 [workspace.dependencies]
 gpui = { git = "https://github.com/zed-industries/zed", branch = "main", features = ["wayland"] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", branch = "main", features = ["wayland"] }
+reqwest_client = { git = "https://github.com/zed-industries/zed", branch = "main" }
 ui = { path = "crates/ui" }
 assets = { path = "crates/assets" }
 services = { path = "crates/services" }

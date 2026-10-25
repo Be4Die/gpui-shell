@@ -1,9 +1,15 @@
 use gpui::prelude::*;
-use gpui::{App, Context, MouseButton, div, img, px};
-use services::{CompositorCommand, Notification, NotificationCommand, NotificationSubscriber};
-use ui::{ActiveTheme, Radius, Spacing, TextSize};
+use std::path::Path;
 
+use gpui::{AnyElement, App, Context, EntityId, MouseButton, Size, Window, div, img, px};
+use services::{CompositorCommand, Notification, NotificationCommand, NotificationSubscriber};
+use ui::{ActiveTheme, Radius, Spacing, TextSize, thumbnail};
+
+use crate::launcher::row::thumbnail_image;
 use crate::state::AppState;
+
+/// Side of the image or icon slot.
+const IMAGE_SIZE: f32 = 64.0;
 
 /// A click on a card with a default action. Wayland apps can't raise their
 /// own window without an activation token, so the compositor focuses it.
@@ -23,14 +29,16 @@ pub(super) fn is_critical(notification: &Notification) -> bool {
 }
 
 /// `compact`: one body line, no actions (a popup at rest).
-pub(super) fn notification_card_body<V>(
+pub(super) fn notification_card_body<V: 'static>(
     notification: &Notification,
+    window: &Window,
     cx: &Context<V>,
     show_image: bool,
     compact: bool,
     subscriber: &NotificationSubscriber,
 ) -> gpui::AnyElement {
     let theme = cx.theme();
+    let owner = cx.entity_id();
     let app_name = notification.app_name.clone();
     let app_icon_name = notification.app_icon.clone();
     let icon_source = notification.app_icon_path.as_ref().map(|p| {
@@ -67,17 +75,14 @@ pub(super) fn notification_card_body<V>(
             match (&icon_source, &image_source, show_image) {
                 // If we have both icon and image, show a larger image with small icon overlay
                 (Some(icon), Some(img_src), true) => div()
-                    .w(px(64.0))
-                    .h(px(64.0))
+                    .w(px(IMAGE_SIZE))
+                    .h(px(IMAGE_SIZE))
                     .flex_shrink_0()
                     .rounded(Radius::Medium.pixels())
                     .overflow_hidden()
                     .relative()
-                    .child(
-                        img(img_src.clone())
-                            .size_full()
-                            .object_fit(gpui::ObjectFit::Cover),
-                    )
+                    .bg(theme.colors.surface_background)
+                    .children(notification_image(img_src, owner, window, cx))
                     .child(
                         div()
                             .absolute()
@@ -101,20 +106,17 @@ pub(super) fn notification_card_body<V>(
                     .into_any_element(),
                 // If only image, show larger image
                 (_, Some(img_src), true) => div()
-                    .w(px(64.0))
-                    .h(px(64.0))
+                    .w(px(IMAGE_SIZE))
+                    .h(px(IMAGE_SIZE))
                     .flex_shrink_0()
                     .rounded(Radius::Medium.pixels())
                     .overflow_hidden()
-                    .child(
-                        img(img_src.clone())
-                            .size_full()
-                            .object_fit(gpui::ObjectFit::Cover),
-                    )
+                    .bg(theme.colors.surface_background)
+                    .children(notification_image(img_src, owner, window, cx))
                     .into_any_element(),
                 // Otherwise show app icon or fallback in 64x64px container
                 _ => div()
-                    .size(px(64.0))
+                    .size(px(IMAGE_SIZE))
                     .flex_shrink_0()
                     .rounded(Radius::Medium.pixels())
                     .bg(theme.colors.surface_background)
@@ -147,6 +149,8 @@ pub(super) fn notification_card_body<V>(
                 .flex_1()
                 .flex()
                 .flex_col()
+                .justify_center()
+                .min_h(px(IMAGE_SIZE))
                 .gap(px(4.0))
                 .overflow_hidden()
                 .when(show_image, |el| el.pr(Spacing::XXXLarge.pixels()))
@@ -258,4 +262,29 @@ fn urgency_color<V>(urgency: u8, cx: &Context<V>) -> gpui::Hsla {
         0 => theme.colors.text_muted,
         _ => theme.colors.accent,
     }
+}
+
+/// The notification's image at slot size. Raster files go through the
+/// thumbnail cache so a full-size screenshot is never decoded whole; while
+/// it loads the slot stays empty and the owner is redrawn when it is ready.
+fn notification_image(
+    path: &Path,
+    owner: EntityId,
+    window: &Window,
+    cx: &App,
+) -> Option<AnyElement> {
+    let fit = |source: gpui::ImageSource| {
+        img(source)
+            .size_full()
+            .object_fit(gpui::ObjectFit::Cover)
+            .into_any_element()
+    };
+    if !thumbnail::is_thumbnailable(path) {
+        return Some(fit(path.to_path_buf().into()));
+    }
+    let slot = Size {
+        width: px(IMAGE_SIZE),
+        height: px(IMAGE_SIZE),
+    };
+    thumbnail_image(path, None, slot, owner, window, cx).map(|image| fit(image.into()))
 }

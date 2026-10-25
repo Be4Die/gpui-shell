@@ -6,7 +6,7 @@ mod battery;
 mod clock;
 mod keyboard_layout;
 mod launcher_btn;
-mod mpris;
+pub mod mpris;
 mod registry;
 pub mod settings;
 pub(crate) mod style;

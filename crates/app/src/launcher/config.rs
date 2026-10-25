@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 use super::modules::{
     apps::config::AppsConfig, calculator::config::CalculatorConfig,
-    clipboard::config::ClipboardConfig, help::config::HelpConfig, services::config::ServicesConfig,
-    shell::config::ShellConfig, sysinfo::config::SysInfoConfig, theme::config::ThemesConfig,
-    wallpaper::config::WallpaperConfig, web::config::WebConfig,
+    clipboard::config::ClipboardConfig, help::config::HelpConfig, mpris::config::MprisConfig,
+    services::config::ServicesConfig, shell::config::ShellConfig, sysinfo::config::SysInfoConfig,
+    theme::config::ThemesConfig, wallpaper::config::WallpaperConfig, web::config::WebConfig,
     workspaces::config::WorkspacesConfig,
 };
 
@@ -49,6 +49,7 @@ pub struct ModulesConfig {
     pub themes: ThemesConfig,
     pub services: ServicesConfig,
     pub sysinfo: SysInfoConfig,
+    pub mpris: MprisConfig,
     pub calculator: CalculatorConfig,
     pub clipboard: ClipboardConfig,
     pub help: HelpConfig,

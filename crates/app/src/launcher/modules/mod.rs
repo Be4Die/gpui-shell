@@ -5,6 +5,7 @@ pub mod apps;
 pub mod calculator;
 pub mod clipboard;
 pub mod help;
+pub mod mpris;
 pub mod services;
 pub mod shell;
 pub mod sysinfo;
@@ -28,6 +29,7 @@ pub fn registry(config: &ModulesConfig) -> Vec<ModuleDescriptor> {
         theme::descriptor(&config.themes),
         services::descriptor(&config.services),
         sysinfo::descriptor(&config.sysinfo),
+        mpris::descriptor(&config.mpris),
         calculator::descriptor(&config.calculator),
         clipboard::descriptor(&config.clipboard),
     ];

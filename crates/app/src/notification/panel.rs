@@ -34,7 +34,7 @@ impl NotificationCenter {
 }
 
 impl Render for NotificationCenter {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
         let theme = cx.theme();
         let config = &cx.config().notification;
         let notifications = self.data.notifications.clone();
@@ -70,6 +70,7 @@ impl Render for NotificationCenter {
                         })
                         .child(notification_card_body(
                             &item,
+                            window,
                             cx,
                             true,
                             false,

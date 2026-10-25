@@ -68,6 +68,7 @@ impl NotificationPopupStack {
         notification: &Notification,
         compact: bool,
         config: &NotificationConfig,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -93,8 +94,9 @@ impl NotificationPopupStack {
             })
             .child(notification_card_body(
                 notification,
+                window,
                 cx,
-                false,
+                true,
                 compact,
                 &self.subscriber,
             ))
@@ -135,7 +137,12 @@ impl NotificationPopupStack {
             .into_any_element()
     }
 
-    fn build_stack(&self, config: &NotificationConfig, cx: &mut Context<Self>) -> AnyElement {
+    fn build_stack(
+        &self,
+        config: &NotificationConfig,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let fanned = self.hovered;
         let shown = if fanned {
             self.notifications.len()
@@ -149,7 +156,7 @@ impl NotificationPopupStack {
         };
         let cards: Vec<AnyElement> = self.notifications[..shown]
             .iter()
-            .map(|notification| self.render_card(notification, !fanned, config, cx))
+            .map(|notification| self.render_card(notification, !fanned, config, window, cx))
             .collect();
 
         div()
@@ -184,7 +191,7 @@ impl Render for NotificationPopupStack {
         let config = cx.config().notification.clone();
         let margin = popup_margin(&config);
 
-        let measure = self.build_stack(&config, cx);
+        let measure = self.build_stack(&config, window, cx);
         // Fanned out, every card shows in full, bounded only by the screen.
         let max_height = if self.hovered {
             px(f32::INFINITY)
@@ -219,7 +226,7 @@ impl Render for NotificationPopupStack {
         div()
             .id("notification-popup-window")
             .size_full()
-            .when(paint, |el| el.child(self.build_stack(&config, cx)))
+            .when(paint, |el| el.child(self.build_stack(&config, window, cx)))
     }
 }
 

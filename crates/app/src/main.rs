@@ -57,7 +57,12 @@ async fn main() {
         .expect("Failed to initialize services");
 
     // Create and run the GPUI application
-    let app = application().with_assets(Assets {});
+    // gpui ships a no-op client, so `img(url)` (album art) needs a real one.
+    let http_client = reqwest_client::ReqwestClient::user_agent("gpuishell")
+        .expect("Failed to build the HTTP client");
+    let app = application()
+        .with_assets(Assets {})
+        .with_http_client(std::sync::Arc::new(http_client));
     app.run(move |cx| {
         config::Config::init(cx);
         // Registers the TextField / Menu keybindings the component set needs.
