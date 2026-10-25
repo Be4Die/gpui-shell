@@ -1,7 +1,7 @@
-use gpui::prelude::*;
-use gpui::{Context, MouseButton, Render, ScrollHandle, Window, div, px};
-use services::{NotificationCommand, NotificationData, NotificationSubscriber};
 use crate::windows::ShellPanel;
+use gpui::prelude::*;
+use gpui::{Context, MouseButton, Render, ScrollHandle, Window, div};
+use services::{NotificationCommand, NotificationData, NotificationSubscriber};
 use ui::{ActiveTheme, Color, Icon, IconSize, Radius, Spacing, TextSize};
 
 use crate::config::ActiveConfig;
@@ -45,11 +45,9 @@ impl Render for NotificationCenter {
         let list_content = if has_notifications {
             div()
                 .children(notifications.into_iter().map(|item| {
-                    let dismiss_subscriber = self.subscriber.clone();
-                    let id = item.id;
                     let clicked = item.clone();
                     div()
-                        .relative()
+                        .id(("notification-card", item.id))
                         .w_full()
                         .p(Spacing::Medium.pixels())
                         .rounded(Radius::Large.pixels())
@@ -72,30 +70,9 @@ impl Render for NotificationCenter {
                             &item,
                             window,
                             cx,
-                            true,
                             false,
                             &self.subscriber,
                         ))
-                        .child(
-                            div()
-                                .absolute()
-                                .top(px(8.0))
-                                .right(px(8.0))
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |_, _, _, cx| {
-                                        cx.stop_propagation();
-                                        dismiss_subscriber
-                                            .dispatch(NotificationCommand::Dismiss(id));
-                                    }),
-                                )
-                                .child(
-                                    Icon::new(config.icons.close())
-                                        .size(IconSize::XSmall)
-                                        .color(Color::Muted),
-                                ),
-                        )
                 }))
                 .into_any_element()
         } else {

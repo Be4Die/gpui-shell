@@ -49,6 +49,9 @@ pub struct Notification {
     pub urgency: u8,
     pub timeout_ms: i32,
     pub timestamp_ms: i64,
+    /// When the popup goes on its own, in unix ms; `None` keeps it until
+    /// dismissed. Moves forward by however long the popups were held.
+    pub expires_at_ms: Option<i64>,
     pub actions: Vec<(String, String)>,
     pub read: bool,
     /// `desktop-entry` hint, without `.desktop`.
@@ -80,6 +83,9 @@ pub struct NotificationData {
     /// Shared so a write hands each subscriber pointers, not copies.
     pub notifications: Vec<Arc<Notification>>,
     pub popup_ids: Vec<u32>,
+    /// Set while the pointer holds the popups: their countdowns stand still
+    /// at this instant.
+    pub popups_held_since_ms: Option<i64>,
     pub dnd: bool,
     pub unread_count: usize,
 }
@@ -164,6 +170,11 @@ impl NotificationSubscriber {
             .collect()
     }
 
+    /// The instant the popups' countdowns froze at, while they are held.
+    pub fn popups_held_since_ms(&self) -> Option<i64> {
+        self.data.lock_ref().popups_held_since_ms
+    }
+
     /// Post a notification from the shell itself. We *are* the notification
     /// daemon, so it goes straight into the state rather than out over D-Bus -
     /// which also means it still shows when the bus name went to someone else
@@ -232,6 +243,26 @@ impl NotificationSubscriber {
                 data.recompute_unread();
             }
             NotificationCommand::HoldPopups(held) => {
+                if *self.popups_held.borrow() == held {
+                    return;
+                }
+                {
+                    let mut data = self.data.lock_mut();
+                    if held {
+                        data.popups_held_since_ms = Some(now_ms());
+                    } else if let Some(since) = data.popups_held_since_ms.take() {
+                        // Deadlines move before the timers wake, so none fires on a stale one.
+                        let shift = now_ms().saturating_sub(since);
+                        let popups = data.popup_ids.clone();
+                        for item in data.notifications.iter_mut() {
+                            if let Some(at) = item.expires_at_ms
+                                && popups.contains(&item.id)
+                            {
+                                Arc::make_mut(item).expires_at_ms = Some(at + shift);
+                            }
+                        }
+                    }
+                }
                 self.popups_held.send_replace(held);
             }
             command if !self.lifecycle.is_up() => {
@@ -552,19 +583,21 @@ impl NotificationServer {
         // asset cache logs a load error for a file that's already gone.
         // Image priority follows the spec: `image-data`, `image-path`, then an
         // `app_icon` that is a file. A file `app_icon` beside a real image is
-        // the app icon.
+        // the app icon; one that became the image (a screenshot) is not shown
+        // twice.
         let app_icon_file = is_image_source(app_icon).then(|| normalize_path(app_icon));
-        let image_path = cache_image_data(&hints, id)
-            .or_else(|| {
-                hint_string(&hints, &["image-path", "image_path"])
-                    .and_then(|p| cache_image_file(&normalize_path(&p), id))
-            })
-            .or_else(|| {
-                let icon_file = app_icon_file.as_deref()?;
-                cache_image_file(icon_file, id)
-            });
+        let hinted_image = cache_image_data(&hints, id).or_else(|| {
+            hint_string(&hints, &["image-path", "image_path"])
+                .and_then(|p| cache_image_file(&normalize_path(&p), id))
+        });
+        let icon_is_image = hinted_image.is_none() && app_icon_file.is_some();
+        let image_path = hinted_image.or_else(|| {
+            let icon_file = app_icon_file.as_deref()?;
+            cache_image_file(icon_file, id)
+        });
         let app_icon_path = match &app_icon_file {
-            Some(file) => Some(file.clone()).filter(|_| image_path.is_some()),
+            Some(_) if icon_is_image => None,
+            Some(file) => Some(file.clone()),
             None => hint_string(&hints, &["app_icon", "icon-path", "icon_path"])
                 .filter(|value| is_image_source(value))
                 .map(|p| normalize_path(&p)),
@@ -600,6 +633,7 @@ impl NotificationServer {
             })
             .collect();
 
+        let timestamp_ms = now_ms();
         let notification = Notification {
             id,
             app_name: app_name.to_string(),
@@ -610,7 +644,8 @@ impl NotificationServer {
             body: body.to_string(),
             urgency,
             timeout_ms,
-            timestamp_ms: Utc::now().timestamp_millis(),
+            timestamp_ms,
+            expires_at_ms: (timeout_ms > 0).then(|| timestamp_ms + i64::from(timeout_ms)),
             actions: parsed_actions,
             read: false,
             desktop_entry,
@@ -643,9 +678,23 @@ impl NotificationServer {
             let timer_generations = self.timer_generations.clone();
             let popups_held = self.popups_held.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(timeout_ms as u64)).await;
-                // Err only once the subscriber is gone; expire anyway.
-                let _ = popups_held.subscribe().wait_for(|held| !held).await;
+                let mut held = popups_held.subscribe();
+                // The deadline moves while the popups are held, so sleep up
+                // to it, then check again; one that is no longer a popup
+                // (dismissed, do-not-disturb) still closes for its sender.
+                while let Some(deadline) = popup_deadline(&data, id) {
+                    let remaining = deadline - now_ms();
+                    if remaining > 0 {
+                        tokio::time::sleep(Duration::from_millis(remaining as u64)).await;
+                    } else if *held.borrow() {
+                        // Err only once the subscriber is gone; expire anyway.
+                        if held.wait_for(|held| !held).await.is_err() {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
 
                 let should_close = timer_generations
                     .lock()
@@ -735,6 +784,22 @@ fn remove_notification(data: &Mutable<NotificationData>, id: u32) -> bool {
     state.popup_ids.retain(|x| *x != id);
     state.recompute_unread();
     len_before != state.notifications.len()
+}
+
+fn now_ms() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+/// When `id`'s popup is due, while it is one and has a deadline.
+fn popup_deadline(data: &Mutable<NotificationData>, id: u32) -> Option<i64> {
+    let data = data.lock_ref();
+    if !data.popup_ids.contains(&id) {
+        return None;
+    }
+    data.notifications
+        .iter()
+        .find(|n| n.id == id)?
+        .expires_at_ms
 }
 
 fn deactivate_notification(data: &Mutable<NotificationData>, id: u32) -> bool {
