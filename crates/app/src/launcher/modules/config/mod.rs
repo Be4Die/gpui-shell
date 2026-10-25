@@ -20,6 +20,7 @@ mod preview;
 pub mod schema;
 pub mod section_page;
 mod sections;
+pub mod select;
 mod value_page;
 
 use ui::IconName;

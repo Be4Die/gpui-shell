@@ -177,6 +177,11 @@ impl Layout {
     }
 }
 
+/// The exclusion strips the frame opens: one per band edge, with its depth.
+pub fn strips(config: &Config) -> Vec<(BarPosition, f32)> {
+    Layout::new(config).strips
+}
+
 struct Frame {
     panel_open: bool,
     input_region: Option<Vec<Bounds<Pixels>>>,

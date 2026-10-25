@@ -599,6 +599,11 @@ impl Launcher {
     }
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // An open select on a config form goes first; it cannot hold the
+        // keyboard focus itself, since the input keeps it.
+        if modules::config::select::close(cx) {
+            return;
+        }
         if self.menu.take().is_some() {
             cx.notify();
         } else if !self.input.is_empty() {
@@ -1086,6 +1091,7 @@ enum NavKey {
 }
 
 fn close(window: &mut Window, cx: &mut App) {
+    modules::config::select::close(cx);
     crate::windows::ShellWindows::set_launcher(cx, None);
     window.remove_window();
 }

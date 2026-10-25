@@ -1,4 +1,5 @@
 use gpui::{App, Bounds, MouseDownEvent, Size, Window, layer_shell::Anchor, point, px};
+use ui::patterns::frame::frame_hole;
 
 use crate::windows::ShellWindows;
 
@@ -30,6 +31,8 @@ pub(super) struct DockPanelPlacement {
     pub(super) margin: (f32, f32, f32, f32),
 }
 
+/// `display_bounds` is the area the dock was laid out in; `usable_bounds`
+/// the area the menu will be, which a reserved dock is outside of.
 pub(super) fn dock_panel_placement_from_dock_click(
     geometry: DockGeometry,
     dock_click: gpui::Point<gpui::Pixels>,
@@ -121,20 +124,21 @@ pub(super) fn dock_panel_placement_from_event(
     dock_size: Size<gpui::Pixels>,
     menu_size: Size<gpui::Pixels>,
 ) -> DockPanelPlacement {
-    let (display_bounds, usable_bounds) = ShellWindows::display(cx, window)
-        .map(|display| (display.bounds(), display.visible_bounds()))
-        .unwrap_or_else(|| {
-            let bounds = Bounds::new(point(px(0.0), px(0.0)), window.viewport_size());
-            (bounds, bounds)
-        });
+    let display = ShellWindows::display(cx, window)
+        .map(|display| display.bounds())
+        .unwrap_or_else(|| Bounds::new(point(px(0.0), px(0.0)), window.viewport_size()));
+    // The dock is laid out inside the bar's and the frame's zones; the menu
+    // inside the dock's own as well, when it reserves its space.
+    let around_dock = frame_hole(display, ShellWindows::reserved_edges(cx, false));
+    let usable = frame_hole(display, ShellWindows::reserved_edges(cx, true));
 
     dock_panel_placement_from_dock_click(
         geometry,
         event.position,
         dock_size,
         menu_size,
-        display_bounds,
-        usable_bounds,
+        around_dock,
+        usable,
     )
 }
 

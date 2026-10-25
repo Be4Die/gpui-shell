@@ -444,6 +444,33 @@ impl ShellWindows {
             .or_else(|| window.display(cx))
     }
 
+    /// How deep the shell's own exclusive zones are on each edge: the bar,
+    /// the frame's strips and, `with_dock`, a dock that reserves its space.
+    /// The compositor lays a new layer surface out inside these and counts
+    /// its margins from there, which gpui's display bounds do not know.
+    pub fn reserved_edges(cx: &App, with_dock: bool) -> gpui::Edges<Pixels> {
+        use ui::patterns::frame::edge_mut;
+        let config = crate::config::Config::global(cx);
+        let mut edges = gpui::Edges::all(px(0.));
+        let add = |edges: &mut gpui::Edges<Pixels>, edge: BarPosition, depth: f32| {
+            let slot = edge_mut(edges, edge.edge());
+            *slot += px(depth);
+        };
+        add(&mut edges, config.bar.position, config.bar.depth());
+        for (edge, thickness) in crate::frame::strips(config) {
+            add(&mut edges, edge, thickness);
+        }
+        if with_dock && config.dock.reserve_space {
+            let dock = &config.dock;
+            add(
+                &mut edges,
+                dock.position,
+                crate::dock::thickness(dock) + dock.edge_gap(),
+            );
+        }
+        edges
+    }
+
     pub(crate) fn osd(cx: &App) -> Option<crate::osd::OsdWindowState> {
         cx.try_global::<Self>()?.osd.clone()
     }

@@ -220,7 +220,8 @@ impl Render for DockContextMenu {
             .on_action(cx.listener(|_this, _: &Cancel, _window, cx| {
                 ShellWindows::close_panel(cx);
             }))
-            .size_full()
+            // Only as tall as its rows: the panel window fits itself to this.
+            .w_full()
             .shell_panel(cx)
             .p(px(DOCK_CONTEXT_MENU_VERTICAL_PADDING))
             .text_color(cx.theme().colors().text)

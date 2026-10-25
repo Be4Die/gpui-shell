@@ -9,8 +9,7 @@ use gpui::{
 };
 use ui::{
     ActiveTheme, Button, ButtonCommon, ButtonStyle, Clickable, Color, Icon, IconName, IconSize,
-    Label, LabelCommon, Radius, Slider, Spacing, Stepper, Switch, TextSize, Toggleable, h_flex,
-    v_flex,
+    Label, LabelCommon, Radius, Slider, Spacing, Stepper, Switch, TextSize, h_flex, v_flex,
 };
 
 use super::choice_page::ChoicePage;
@@ -610,24 +609,16 @@ fn field_widget<S: Editable>(path: &ConfigPath<S>, field: &Field<S>, cx: &App) -
             current, options, ..
         } => {
             let selected = current(section);
-            let buttons = options.iter().enumerate().map(|(ix, option)| {
-                let path = path.clone();
-                let field = field.clone();
-                Button::new(SharedString::from(format!("{id}-{ix}")), option.label)
-                    .style(ButtonStyle::Outlined)
-                    .toggle_state(ix == selected)
-                    .on_click(move |_, _, cx| {
-                        field.choose(&path, ix, cx);
-                    })
-            });
-            div()
-                .w_full()
-                .flex()
-                .flex_wrap()
-                .justify_end()
-                .gap(Spacing::XSmall.pixels())
-                .children(buttons)
-                .into_any_element()
+            let labels: Vec<SharedString> = options.iter().map(|o| o.label.into()).collect();
+            let path = path.clone();
+            let field = field.clone();
+            super::select::select(
+                id,
+                labels,
+                (selected < options.len()).then_some(selected),
+                move |ix, cx| field.choose(&path, ix, cx),
+                cx,
+            )
         }
         Editor::Text { .. } | Editor::Nested { .. } | Editor::Custom { .. } | Editor::Bundle(_) => {
             div().into_any_element()
