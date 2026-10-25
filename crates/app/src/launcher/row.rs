@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use gpui::{
-    AnyElement, App, EntityId, FontWeight, ObjectFit, Pixels, RenderImage, SharedString, Size,
-    Window, div, img, prelude::*, px, size,
+    AnyElement, App, Div, EntityId, FontWeight, ObjectFit, Pixels, RenderImage, SharedString, Size,
+    Stateful, Window, div, img, prelude::*, px, size,
 };
 use ui::{
     ActiveTheme, Color, HighlightedLabel, Icon, IconSize, Label, LabelCommon, ListItem,
@@ -15,6 +15,7 @@ use ui::{
     thumbnail,
 };
 
+use super::action::Action;
 use super::content::{Accessory, AccessoryKind, Dropdown, EmptyView, Item, ItemIcon, Section};
 
 const ICON_SLOT: Pixels = px(28.);
@@ -268,8 +269,13 @@ pub(super) fn empty_view(empty: Option<&EmptyView>) -> AnyElement {
         .into_any_element()
 }
 
-/// The dropdown's choices as a row of chips.
-pub(super) fn dropdown_chips(dropdown: &Dropdown, cx: &App) -> AnyElement {
+/// The dropdown's choices as a row of chips; `trailing` is its button, drawn
+/// by the launcher so the click can run the action.
+pub(super) fn dropdown_chips(
+    dropdown: &Dropdown,
+    trailing: Option<AnyElement>,
+    cx: &App,
+) -> AnyElement {
     let colors = cx.theme().colors();
     let chips = dropdown.items.iter().enumerate().map(|(ix, item)| {
         let selected = item.value == dropdown.value;
@@ -328,5 +334,34 @@ pub(super) fn dropdown_chips(dropdown: &Dropdown, cx: &App) -> AnyElement {
         .px(Spacing::Large.pixels())
         .py(Spacing::Small.pixels())
         .children(chips)
+        .children(trailing)
         .into_any_element()
+}
+
+/// An action as a chip at the right end of the row.
+pub(super) fn dropdown_button(action: &Action, cx: &App) -> Stateful<Div> {
+    let colors = cx.theme().colors();
+    div()
+        .id("launcher-dropdown-button")
+        .ml_auto()
+        .flex()
+        .items_center()
+        .gap(Spacing::XSmall.pixels())
+        .px(Spacing::Medium.pixels())
+        .py(px(3.))
+        .rounded_full()
+        .border_1()
+        .border_color(colors.border_variant)
+        .bg(colors.element_background)
+        .cursor_pointer()
+        .text_size(TextSize::XSmall.rems())
+        .text_color(colors.text_accent)
+        .font_weight(FontWeight::MEDIUM)
+        .hover(|s| s.bg(colors.element_hover).border_color(colors.border))
+        .children(
+            action
+                .icon
+                .map(|icon| Icon::new(icon).size(IconSize::XSmall).color(Color::Accent)),
+        )
+        .child(action.title.clone())
 }

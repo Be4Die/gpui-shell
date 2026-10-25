@@ -95,7 +95,7 @@ impl Body {
     }
 
     fn dropdown(&self) -> Option<&Dropdown> {
-        self.collection()?.dropdown.as_ref()
+        self.collection()?.dropdown.as_deref()
     }
 }
 
@@ -1078,11 +1078,19 @@ impl Render for Launcher {
             .current_page()
             .cloned()
             .and_then(|page| page.render_header(window, cx));
-        let dropdown = self
-            .body
-            .as_ref()
-            .and_then(Body::dropdown)
-            .map(|dropdown| row::dropdown_chips(dropdown, cx));
+        let dropdown = match self.body.as_ref().and_then(Body::dropdown) {
+            Some(dropdown) => {
+                let trailing = dropdown.trailing.clone().map(|action| {
+                    row::dropdown_button(&action, cx)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.run(&action, window, cx);
+                        }))
+                        .into_any_element()
+                });
+                Some(row::dropdown_chips(dropdown, trailing, cx))
+            }
+            None => None,
+        };
         let body = self.render_body(cx);
         let menu = self.render_menu(cx);
 

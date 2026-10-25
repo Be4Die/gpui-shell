@@ -86,7 +86,8 @@ pub struct Collection<L> {
     /// filters in `content` and its order is kept.
     pub(super) filtering: bool,
     pub(super) empty: Option<EmptyView>,
-    pub(super) dropdown: Option<Dropdown>,
+    /// Boxed: it is rare and would otherwise dominate the body's size.
+    pub(super) dropdown: Option<Box<Dropdown>>,
     pub(super) layout: L,
 }
 
@@ -148,7 +149,7 @@ impl<L> Collection<L> {
 
     /// Filter chips under the search; ← → cycle them while it is empty.
     pub fn dropdown(mut self, dropdown: Dropdown) -> Self {
-        self.dropdown = Some(dropdown);
+        self.dropdown = Some(Box::new(dropdown));
         self
     }
 
@@ -406,6 +407,8 @@ pub struct Dropdown {
     pub(super) value: SharedString,
     pub(super) items: Vec<DropdownItem>,
     pub(super) on_change: OnChange,
+    /// A button at the right end of the chip row; not part of the ← → cycle.
+    pub(super) trailing: Option<Action>,
 }
 
 impl Dropdown {
@@ -422,11 +425,18 @@ impl Dropdown {
                 page.update(cx, |page, cx| on_change(page, value, window, cx))
                     .ok();
             }),
+            trailing: None,
         }
     }
 
     pub fn item(mut self, item: DropdownItem) -> Self {
         self.items.push(item);
+        self
+    }
+
+    /// Run `action` from a button after the chips.
+    pub fn trailing(mut self, action: Action) -> Self {
+        self.trailing = Some(action);
         self
     }
 
