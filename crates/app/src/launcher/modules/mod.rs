@@ -7,6 +7,7 @@ pub mod clipboard;
 pub mod help;
 pub mod services;
 pub mod shell;
+pub mod sysinfo;
 pub mod theme;
 pub mod wallpaper;
 pub mod web;
@@ -26,6 +27,7 @@ pub fn registry(config: &ModulesConfig) -> Vec<ModuleDescriptor> {
         wallpaper::descriptor(&config.wallpaper),
         theme::descriptor(&config.themes),
         services::descriptor(&config.services),
+        sysinfo::descriptor(&config.sysinfo),
         calculator::descriptor(&config.calculator),
         clipboard::descriptor(&config.clipboard),
     ];

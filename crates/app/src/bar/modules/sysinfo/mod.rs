@@ -1,9 +1,8 @@
 //! SysInfo widget showing CPU and memory usage in the bar.
 //!
-//! Clicking the widget opens a detailed system information panel.
+//! Clicking the widget opens the launcher's system info module.
 
-use crate::windows::{PanelConfig, PanelSize, ShellWindows};
-use gpui::{AnyElement, App, ClickEvent, Context, Pixels, Point, Window, prelude::*, px};
+use gpui::{AnyElement, Context, Window, prelude::*, px};
 use services::SysInfoData;
 use ui::{ActiveTheme, ButtonCommon, ButtonLike, ButtonStyle, Clickable, IconName};
 
@@ -11,17 +10,13 @@ mod config;
 pub use config::SysInfoConfig;
 
 use super::{BarWidget, style};
-use crate::config::{ActiveConfig, Config};
+use crate::config::ActiveConfig;
+use crate::launcher;
 use crate::state::AppState;
 use crate::state::watch;
-use crate::windows::panel_placement_from_event;
-
-mod panel;
-pub use panel::SysInfoPanel;
 
 /// SysInfo widget showing CPU and memory usage in the bar.
 pub struct SysInfo {
-    subscriber: services::SysInfoSubscriber,
     data: SysInfoData,
 }
 
@@ -37,37 +32,12 @@ impl SysInfo {
         let subscriber = AppState::sysinfo(cx).clone();
         let initial_data = subscriber.get();
 
-        // Subscribe to updates from the sysinfo service
         watch(cx, subscriber.subscribe(), |this, data, cx| {
             this.data = data;
             cx.notify();
         });
 
-        SysInfo {
-            subscriber,
-            data: initial_data,
-        }
-    }
-
-    fn toggle_panel(&mut self, at: Point<Pixels>, window: &Window, cx: &mut App) {
-        let subscriber = self.subscriber.clone();
-        let config = Config::global(cx);
-        let size = PanelSize::FitHeight {
-            width: 350.0,
-            max_height: 600.0,
-        };
-        let (anchor, margin) =
-            panel_placement_from_event(config.bar.position, at, window, cx, size.initial());
-        let config = PanelConfig {
-            size,
-            anchor,
-            margin,
-            namespace: "sysinfo-panel".to_string(),
-        };
-
-        ShellWindows::toggle_panel(cx, window, "sysinfo", config, move |cx| {
-            SysInfoPanel::new(subscriber, cx)
-        });
+        SysInfo { data: initial_data }
     }
 
     fn cpu_icon(&self) -> IconName {
@@ -145,8 +115,9 @@ impl SysInfo {
     ) -> AnyElement {
         ButtonLike::new("sysinfo-widget")
             .style(ButtonStyle::Transparent)
-            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                this.toggle_panel(event.position(), window, cx);
+            .on_click(cx.listener(|_, _, _, cx| {
+                let prefix = cx.config().launcher.modules.sysinfo.prefix.clone();
+                launcher::toggle(Some(prefix), cx);
             }))
             .child(
                 style::stack(is_vertical)

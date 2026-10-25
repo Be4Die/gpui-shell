@@ -901,7 +901,13 @@ impl Launcher {
                     .flex_1()
                     .overflow_hidden()
                     .flex()
-                    .child(div().w(relative(DETAIL_SPLIT)).h_full().child(list))
+                    .child(
+                        div()
+                            .w(relative(DETAIL_SPLIT))
+                            .flex_none()
+                            .h_full()
+                            .child(list),
+                    )
                     .child(
                         div()
                             .w(px(1.))
@@ -912,7 +918,9 @@ impl Launcher {
                         div()
                             .id("launcher-detail")
                             .flex_1()
+                            .min_w(px(0.))
                             .h_full()
+                            .overflow_hidden()
                             .overflow_y_scroll()
                             .children(detail),
                     )

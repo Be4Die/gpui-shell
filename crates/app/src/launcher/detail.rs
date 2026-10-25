@@ -271,6 +271,8 @@ fn render_block(block: Block, cx: &App) -> AnyElement {
             .into_any_element(),
         Block::Code(text) => div()
             .w_full()
+            .min_w(px(0.))
+            .overflow_hidden()
             .p(Spacing::Medium.pixels())
             .rounded(Radius::Small.pixels())
             .bg(colors.surface_background)
