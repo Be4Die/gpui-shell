@@ -202,8 +202,8 @@ impl Workspaces {
             .id("workspaces")
             .justify_center()
             .gap(px(style::group_gap(is_vertical)))
-            .on_scroll_wheel(
-                cx.listener(|this, event: &gpui::ScrollWheelEvent, _window, _cx| {
+            .on_scroll(
+                cx.listener(|this, event: &gpui::ScrollEvent, _window, _cx| {
                     let delta = event.delta.pixel_delta(px(1.0));
                     if delta.y.abs() > px(0.5) {
                         let direction = if delta.y > px(0.0) { -1 } else { 1 };

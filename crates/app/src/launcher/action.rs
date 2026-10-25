@@ -122,7 +122,7 @@ impl Action {
 
     /// A gpui keystroke such as `"ctrl-r"`. Bindings the launcher already
     /// uses (`ctrl-k`, `ctrl-a`, arrows, ...) win over it.
-    pub fn shortcut(mut self, keystroke: &str) -> Self {
+    pub fn shortcut(mut self, keystroke: &'static str) -> Self {
         match Keystroke::parse(keystroke) {
             Ok(keystroke) => self.shortcut = Some(keystroke),
             Err(err) => tracing::warn!("Bad shortcut {keystroke:?} on {}: {err}", self.title),
