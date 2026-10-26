@@ -95,7 +95,10 @@ impl BarWidget for Clock {
         style::stack(ctx)
             .id("clock")
             .gap(ctx.metrics.gap)
-            .child(style::label(ctx, Self::formatted(&config.format_horizontal)))
+            .child(style::label(
+                ctx,
+                Self::formatted(&config.format_horizontal),
+            ))
             .into_any_element()
     }
 }

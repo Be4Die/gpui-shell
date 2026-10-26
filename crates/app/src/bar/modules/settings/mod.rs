@@ -227,7 +227,9 @@ impl Settings {
                     .child(style::icon(ctx, volume_icon))
                     .child(style::icon(ctx, self.network_icon()))
                     .children(self.bluetooth_icon().map(|icon| style::icon(ctx, icon)))
-                    .when(ctx.vertical, |el| el.child(style::icon(ctx, power_profile_icon)))
+                    .when(ctx.vertical, |el| {
+                        el.child(style::icon(ctx, power_profile_icon))
+                    })
                     .when(!ctx.vertical, |el| el.child(style::divider(ctx)))
                     .child(self.render_battery_block(ctx)),
             )

@@ -595,23 +595,24 @@ impl Gallery {
                 )
                 .children(buttons)
         };
-        let button = |id: String, label: String, current: bool, apply: fn(&mut Theme, f32), value: f32| {
-            let weak = weak.clone();
-            Button::new(SharedString::from(id), label)
-                .size(ButtonSize::Compact)
-                .style(if current {
-                    ButtonStyle::Filled
-                } else {
-                    ButtonStyle::Subtle
-                })
-                .toggle_state(current)
-                .on_click(move |_event, _window, cx| {
-                    let mut theme = cx.theme().clone();
-                    apply(&mut theme, value);
-                    Theme::set(theme, cx);
-                    weak.update(cx, |_, cx| cx.notify()).ok();
-                })
-        };
+        let button =
+            |id: String, label: String, current: bool, apply: fn(&mut Theme, f32), value: f32| {
+                let weak = weak.clone();
+                Button::new(SharedString::from(id), label)
+                    .size(ButtonSize::Compact)
+                    .style(if current {
+                        ButtonStyle::Filled
+                    } else {
+                        ButtonStyle::Subtle
+                    })
+                    .toggle_state(current)
+                    .on_click(move |_event, _window, cx| {
+                        let mut theme = cx.theme().clone();
+                        apply(&mut theme, value);
+                        Theme::set(theme, cx);
+                        weak.update(cx, |_, cx| cx.notify()).ok();
+                    })
+            };
 
         v_flex()
             .gap(Spacing::XSmall.pixels())
@@ -656,10 +657,11 @@ impl Gallery {
 /// `STORY=Bar STORY_RADIUS_SCALE=0 STORY_OPACITY=0.7 STORY_SCHEME="Gruvbox Dark"`.
 fn apply_env(cx: &mut App) {
     let mut theme = cx.theme().clone();
-    if let Some(scheme) = std::env::var("STORY_SCHEME")
-        .ok()
-        .and_then(|name| schemes().iter().find(|s| s.name.eq_ignore_ascii_case(&name)))
-    {
+    if let Some(scheme) = std::env::var("STORY_SCHEME").ok().and_then(|name| {
+        schemes()
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(&name))
+    }) {
         theme.set_palette(scheme.name.clone(), scheme.palette);
     }
     if let Some(scale) = std::env::var("STORY_RADIUS_SCALE")

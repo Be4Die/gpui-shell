@@ -274,18 +274,12 @@ fn layout_form(path: &ConfigPath<BarConfig>, cx: &App) -> AnyElement {
             )
             .icon_size(IconSize::Small)
             .style(ButtonStyle::Ghost)
-            .tooltip(Tooltip::text(format!(
-                "Add {}",
-                kind.label.to_lowercase()
-            )))
+            .tooltip(Tooltip::text(format!("Add {}", kind.label.to_lowercase())))
             .on_click(move |_, _, cx| {
                 edit_slots(
                     &path,
                     &[slot],
-                    |bar| {
-                        slot.items_mut(bar)
-                            .push(BarItem::Widget(kind.name.into()))
-                    },
+                    |bar| slot.items_mut(bar).push(BarItem::Widget(kind.name.into())),
                     cx,
                 );
             })
@@ -527,10 +521,7 @@ impl LauncherPage for AddWidgetPage {
                         edit_slots(
                             &path,
                             &[slot],
-                            |bar| {
-                                slot.items_mut(bar)
-                                    .push(BarItem::Widget(kind.name.into()))
-                            },
+                            |bar| slot.items_mut(bar).push(BarItem::Widget(kind.name.into())),
                             cx,
                         );
                         Outcome::Pop

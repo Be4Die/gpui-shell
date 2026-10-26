@@ -5,9 +5,7 @@ use gpui::{AnyElement, App, ClickEvent, Context, Pixels, Point, Window, prelude:
 use services::{NotificationCommand, NotificationData, NotificationSubscriber};
 use ui::{ButtonCommon, ButtonLike, ButtonStyle, Clickable, IconName, LabelCommon, TextSize};
 
-use crate::bar::modules::{
-    BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, boxed, style,
-};
+use crate::bar::modules::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, boxed, style};
 use crate::config::{ActiveConfig, Config};
 use crate::state::{AppState, watch};
 use crate::windows::{PanelConfig, PanelSize, ShellWindows, panel_placement_from_event};

@@ -3,6 +3,7 @@
 mod config;
 pub use config::TrayConfig;
 
+use crate::windows::ShellPanel;
 use crate::windows::{PanelConfig, PanelSize, ShellWindows, panel_placement_from_event};
 use gpui::{
     AnyElement, App, ClickEvent, Context, ElementId, Pixels, Point, Render, RenderImage,
@@ -12,15 +13,12 @@ use image::{Frame, RgbaImage};
 use services::{MenuLayout, MenuLayoutProps, TrayCommand, TrayData, TrayIcon, TrayItem};
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::windows::ShellPanel;
 use ui::{
     ActiveTheme, ButtonCommon, ButtonLike, ButtonStyle, Clickable, Color, Disableable, Divider,
     Icon, IconName, IconSize, Label, LabelCommon, List, ListItem, Spacing, TextSize,
 };
 
-use super::{
-    BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style,
-};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style};
 use crate::config::{ActiveConfig, Config};
 use crate::state::AppState;
 use crate::state::watch;

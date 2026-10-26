@@ -123,7 +123,12 @@ impl RenderOnce for Avatar {
             .items_center()
             .justify_center()
             .when_some(image, |this, source| {
-                this.child(img(source).size(diameter).rounded(Radius::Full.pixels()).bg(bg))
+                this.child(
+                    img(source)
+                        .size(diameter)
+                        .rounded(Radius::Full.pixels())
+                        .bg(bg),
+                )
             })
             .when(!has_image, |this| {
                 this.child(

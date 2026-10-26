@@ -591,9 +591,7 @@ impl<S: Editable> Field<S> {
             Editor::Text { lens, .. } => Some((lens.to_toml)(section)),
             Editor::Choice {
                 current, options, ..
-            } => {
-                options.get(current(section)).map(|o| o.value.clone())
-            }
+            } => options.get(current(section)).map(|o| o.value.clone()),
             Editor::Nested { .. } | Editor::Custom { .. } | Editor::Bundle(_) => None,
         }
     }

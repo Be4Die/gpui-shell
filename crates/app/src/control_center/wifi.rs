@@ -11,8 +11,7 @@ use gpui::{
 use services::{AccessPoint, NetworkCommand, NetworkData, WifiAttempt, WifiAttemptStatus};
 use ui::{
     ActiveTheme, Color, Fade, Icon, IconName, IconSize, InputBuffer, Opacity, Radius, Spacing,
-    Spinner, TextSize,
-    render_masked_input_line,
+    Spinner, TextSize, render_masked_input_line,
 };
 
 use crate::icons;

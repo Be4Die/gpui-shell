@@ -12,8 +12,7 @@ use gpui::{
 use ui::{
     ActiveTheme, Color, HighlightedLabel, Icon, IconSize, Label, LabelCommon, ListItem,
     ListItemSpacing, Radius, Spacing, TextSize, ThumbnailCache, ThumbnailKey, Toggleable,
-    inset_radius,
-    thumbnail,
+    inset_radius, thumbnail,
 };
 
 use ui::patterns::card_radius;

@@ -7,9 +7,7 @@ use gpui::{AnyElement, Context, Window, div, prelude::*};
 use services::CompositorState;
 use ui::{IconName, LabelCommon};
 
-use super::{
-    BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style,
-};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style};
 use crate::config::ActiveConfig;
 use crate::state::AppState;
 use crate::state::watch;

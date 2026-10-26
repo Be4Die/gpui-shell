@@ -176,7 +176,10 @@ impl Knob {
             Action::listener(title, cx, move |_, _, cx| {
                 let mut theme = cx.theme().clone();
                 let value = (self.get)(&theme) + self.step * direction;
-                (self.set)(&mut theme, snap(value, self.step).clamp(self.range.0, self.range.1));
+                (self.set)(
+                    &mut theme,
+                    snap(value, self.step).clamp(self.range.0, self.range.1),
+                );
                 apply_theme(theme, cx);
                 cx.notify();
                 Outcome::Stay
@@ -311,7 +314,11 @@ fn preview(cx: &App) -> AnyElement {
                         ),
                 ),
         )
-        .child(Label::new(summary).size(TextSize::XSmall).color(Color::Muted))
+        .child(
+            Label::new(summary)
+                .size(TextSize::XSmall)
+                .color(Color::Muted),
+        )
         .into_any_element()
 }
 

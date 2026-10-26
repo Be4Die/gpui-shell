@@ -131,18 +131,24 @@ impl Mpris {
                     .overflow_hidden()
                     .child(style::icon(ctx, self.icon()))
                     .when_some(label, |el, (title, artist)| {
-                        let title_chars = if artist.is_some() { chars * 2 / 3 } else { chars };
-                        el.child(style::label(ctx, style::fit_words(&title, title_chars)).truncate())
-                            .when_some(artist, |el, artist| {
-                                el.child(
-                                    style::label_in(
-                                        ctx,
-                                        style::fit_words(&artist, chars - title_chars),
-                                        ctx.ink.muted,
-                                    )
-                                    .truncate(),
+                        let title_chars = if artist.is_some() {
+                            chars * 2 / 3
+                        } else {
+                            chars
+                        };
+                        el.child(
+                            style::label(ctx, style::fit_words(&title, title_chars)).truncate(),
+                        )
+                        .when_some(artist, |el, artist| {
+                            el.child(
+                                style::label_in(
+                                    ctx,
+                                    style::fit_words(&artist, chars - title_chars),
+                                    ctx.ink.muted,
                                 )
-                            })
+                                .truncate(),
+                            )
+                        })
                     }),
             )
             .into_any_element()

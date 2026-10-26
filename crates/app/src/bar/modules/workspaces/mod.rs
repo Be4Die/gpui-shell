@@ -12,9 +12,7 @@ use ui::{IconName, h_flex};
 const SCROLL_LINE: Pixels = px(1.0);
 const SCROLL_DEADZONE: Pixels = px(0.5);
 
-use super::{
-    BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style,
-};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style};
 use crate::config::ActiveConfig;
 use crate::state::AppState;
 use crate::state::watch;
@@ -86,11 +84,7 @@ impl Workspaces {
             .dispatch(CompositorCommand::ScrollWorkspace(direction));
     }
 
-    fn workspace_label(
-        ws: &services::Workspace,
-        show_numbers: bool,
-        show_icons: bool,
-    ) -> String {
+    fn workspace_label(ws: &services::Workspace, show_numbers: bool, show_icons: bool) -> String {
         if !show_numbers && !show_icons {
             return String::new();
         }
@@ -146,7 +140,11 @@ impl Workspaces {
             .justify_center()
             // A cell is at least its square (a pill when active) and grows
             // with a named workspace, padded so the fill holds the text.
-            .min_w(if is_active { cell.width_active } else { cell.width })
+            .min_w(if is_active {
+                cell.width_active
+            } else {
+                cell.width
+            })
             .px(ctx.rhythm.unit)
             .h(cell.height)
             .rounded(cell.radius)

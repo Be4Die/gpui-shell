@@ -29,12 +29,12 @@ mod wifi;
 pub use config::{ControlCenterConfig, PowerActionsConfig};
 
 use crate::icons;
+use crate::windows::ShellPanel;
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, MouseButton, Task, Window, div, prelude::*, px,
 };
 use services::{ChargeLimit, UPowerCommand};
 use ui::patterns::PanelSurface;
-use crate::windows::ShellPanel;
 use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize};
 
 use crate::config::ActiveConfig;

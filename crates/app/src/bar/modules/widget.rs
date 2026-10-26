@@ -76,7 +76,10 @@ pub struct BarWidgetDescriptor {
 
 impl BarWidgetDescriptor {
     /// `build` is the widget's `new`, wrapped: `|cx| Box::new(cx.new(Clock::new))`.
-    pub(crate) const fn new(meta: BarWidgetMeta, build: fn(&mut App) -> Box<dyn DynWidget>) -> Self {
+    pub(crate) const fn new(
+        meta: BarWidgetMeta,
+        build: fn(&mut App) -> Box<dyn DynWidget>,
+    ) -> Self {
         Self { meta, build }
     }
 
@@ -91,7 +94,10 @@ impl BarWidgetDescriptor {
 }
 
 /// `Box::new(cx.new(W::new))` as a descriptor's `build`.
-pub(crate) fn boxed<W: BarWidget>(cx: &mut App, new: fn(&mut Context<W>) -> W) -> Box<dyn DynWidget> {
+pub(crate) fn boxed<W: BarWidget>(
+    cx: &mut App,
+    new: fn(&mut Context<W>) -> W,
+) -> Box<dyn DynWidget> {
     Box::new(cx.new(new))
 }
 

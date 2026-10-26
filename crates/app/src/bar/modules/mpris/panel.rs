@@ -2,11 +2,11 @@
 
 use std::time::Duration;
 
+use crate::windows::ShellPanel;
 use gpui::{AnyElement, App, Context, FontWeight, ObjectFit, Window, div, img, prelude::*, px};
 use services::{
     MprisCommand, MprisData, MprisPlayerData, MprisSubscriber, PlaybackStatus, PlayerCommand,
 };
-use crate::windows::ShellPanel;
 use ui::patterns::PanelSurface;
 use ui::{
     ActiveTheme, ButtonCommon, ButtonSize, ButtonStyle, Clickable, Color, Icon, IconButton,

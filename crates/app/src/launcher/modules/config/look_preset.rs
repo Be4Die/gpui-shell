@@ -35,7 +35,12 @@ pub fn apply_look(look: Look, path: &ConfigPath<BarConfig>, cx: &mut App) {
         path.set_raw(path.keys_for(key), value, bar.clone(), cx);
     }
     match bar.padding {
-        Some(padding) => path.set_raw(path.keys_for("padding"), to_value(&padding), bar.clone(), cx),
+        Some(padding) => path.set_raw(
+            path.keys_for("padding"),
+            to_value(&padding),
+            bar.clone(),
+            cx,
+        ),
         None => path.remove_raw(path.keys_for("padding"), bar.clone(), cx),
     }
     for key in ["segments.gap", "segments.inset", "segments.padding"] {

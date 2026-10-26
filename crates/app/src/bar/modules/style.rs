@@ -134,8 +134,14 @@ mod tests {
 
     #[test]
     fn fit_words_cuts_between_words() {
-        assert_eq!(fit_words("Strawberry Fields Forever", 40), "Strawberry Fields Forever");
-        assert_eq!(fit_words("Strawberry Fields Forever", 20), "Strawberry Fields…");
+        assert_eq!(
+            fit_words("Strawberry Fields Forever", 40),
+            "Strawberry Fields Forever"
+        );
+        assert_eq!(
+            fit_words("Strawberry Fields Forever", 20),
+            "Strawberry Fields…"
+        );
         assert_eq!(fit_words("Strawberry Fields Forever", 12), "Strawberry…");
         // One long word: no boundary worth keeping, so cut it.
         assert_eq!(fit_words("Antidisestablishmentarianism", 10), "Antidises…");
@@ -143,4 +149,3 @@ mod tests {
         assert_eq!(fit_words("anything", 0), "anything");
     }
 }
-

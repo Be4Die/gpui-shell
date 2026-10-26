@@ -175,7 +175,12 @@ impl RenderOnce for BarSurface {
     }
 }
 
-fn section(vertical: bool, align: Align, gap: Pixels, segments: Vec<AnyElement>) -> impl IntoElement {
+fn section(
+    vertical: bool,
+    align: Align,
+    gap: Pixels,
+    segments: Vec<AnyElement>,
+) -> impl IntoElement {
     if vertical {
         // A vertical bar sizes to its widgets, so only the centre section
         // claims the leftover space; start and end stay at their content
@@ -525,10 +530,7 @@ impl RenderOnce for BarChip {
                 .py(geometry.margin)
                 .child(chip)
         } else {
-            div()
-                .mx(geometry.margin)
-                .my(geometry.margin)
-                .child(chip)
+            div().mx(geometry.margin).my(geometry.margin).child(chip)
         }
     }
 }
@@ -570,7 +572,10 @@ mod tests {
             ),
             (px(8.), px(2.), Some(px(24.)), px(2.))
         );
-        assert_eq!(ChipGeometry::derive(&rhythm, true, px(8.)).padding_main, px(6.));
+        assert_eq!(
+            ChipGeometry::derive(&rhythm, true, px(8.)).padding_main,
+            px(6.)
+        );
 
         let flush = ChipGeometry::stretched(&rhythm, false, px(0.));
         assert_eq!(flush.thickness, Some(px(32.)));

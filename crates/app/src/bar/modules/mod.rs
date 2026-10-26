@@ -96,7 +96,10 @@ mod tests {
         for meta in widgets() {
             assert_eq!(find(meta.name).map(|w| w.meta.name), Some(meta.name));
             assert!(!meta.label.is_empty() && !meta.description.is_empty());
-            let hits = REGISTRY.iter().filter(|w| w.meta.matches(meta.name)).count();
+            let hits = REGISTRY
+                .iter()
+                .filter(|w| w.meta.matches(meta.name))
+                .count();
             assert_eq!(hits, 1, "{} is claimed by {hits} widgets", meta.name);
         }
     }

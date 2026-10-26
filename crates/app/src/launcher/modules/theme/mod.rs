@@ -588,10 +588,12 @@ fn render_current_card(theme: &Theme, current: Option<&Entry>) -> AnyElement {
     }
 
     let row = |colors: [Hsla; 8]| {
-        div()
-            .flex()
-            .gap(px(2.))
-            .children(colors.map(|color| div().size(px(11.)).rounded(Radius::XSmall.pixels()).bg(color)))
+        div().flex().gap(px(2.)).children(colors.map(|color| {
+            div()
+                .size(px(11.))
+                .rounded(Radius::XSmall.pixels())
+                .bg(color)
+        }))
     };
 
     div()
@@ -773,8 +775,20 @@ fn preview_tile(p: &Base16Palette, (width, height): (Pixels, Pixels)) -> impl In
                 .flex_col()
                 .justify_center()
                 .gap(line)
-                .child(div().h(line).w(width * 0.55).rounded(Radius::Full.pixels()).bg(p.base05))
-                .child(div().h(line).w(width * 0.35).rounded(Radius::Full.pixels()).bg(p.base03))
+                .child(
+                    div()
+                        .h(line)
+                        .w(width * 0.55)
+                        .rounded(Radius::Full.pixels())
+                        .bg(p.base05),
+                )
+                .child(
+                    div()
+                        .h(line)
+                        .w(width * 0.35)
+                        .rounded(Radius::Full.pixels())
+                        .bg(p.base03),
+                )
                 .child(
                     div().flex().gap(px(2.)).children(
                         [p.base0d, p.base0b, p.base0a, p.base0e]
