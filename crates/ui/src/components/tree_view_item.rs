@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::theme::{ActiveTheme, Color, Spacing};
+use crate::theme::{ActiveTheme, Color, Fade, Opacity, Radius, Spacing};
 use gpui::{
     App, ClickEvent, ElementId, IntoElement, MouseButton, ParentElement, RenderOnce, SharedString,
     Window, div, prelude::*, px,
@@ -108,15 +108,15 @@ impl Toggleable for TreeViewItem {
 impl RenderOnce for TreeViewItem {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let colors = cx.theme().colors();
-        let selected_bg = colors.element_active.opacity(0.5);
-        let selected_border = colors.border.opacity(0.4);
+        let selected_bg = colors.element_active.fade(Opacity::Muted);
+        let selected_border = colors.border.fade(Opacity::Muted);
 
         let indentation_line = h_flex()
             .h(px(24.0))
             .w(px(22.0))
             .flex_none()
             .justify_center()
-            .child(div().w_px().h_full().bg(colors.border.opacity(0.5)));
+            .child(div().w_px().h_full().bg(colors.border.fade(Opacity::Muted)));
 
         h_flex().id(self.id).w_full().child(
             h_flex()
@@ -127,7 +127,7 @@ impl RenderOnce for TreeViewItem {
                 .pl(px(2.0))
                 .pr(Spacing::Small.pixels())
                 .gap(Spacing::Medium.pixels())
-                .rounded(px(2.0))
+                .rounded(Radius::XSmall.pixels())
                 .border_1()
                 .border_color(gpui::transparent_black())
                 .when(self.selected, |this| {

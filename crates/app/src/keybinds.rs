@@ -66,6 +66,8 @@ pub fn register(cx: &mut App) {
         KeyBinding::new("ctrl-l", CursorRight, Some("Launcher")),
     ]);
 
+    cx.bind_keys([KeyBinding::new("escape", Cancel, Some("DockContextMenu"))]);
+
     // Control Center WiFi password prompt.
     cx.bind_keys([
         KeyBinding::new("escape", Cancel, Some("WifiPassword")),

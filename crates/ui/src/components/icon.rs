@@ -19,7 +19,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::theme::{ActiveTheme, Color};
-use gpui::{App, IntoElement, Length, RenderOnce, SharedString, Window, img, prelude::*, px, svg};
+use gpui::{
+    App, IntoElement, Length, RenderOnce, SharedString, Window, img, prelude::*, px, relative, svg,
+};
 use serde::{Deserialize, Serialize};
 use strum::{EnumIter, EnumString, IntoStaticStr};
 
@@ -336,6 +338,7 @@ impl RenderOnce for Icon {
         // is rems so icons track the window's font scale.
         let size: Length = match self.size {
             IconSize::Exact(p) => px(p).into(),
+            IconSize::Fill => relative(1.).into(),
             other => other.rems().into(),
         };
 

@@ -2,7 +2,6 @@ use gpui::{
     App, Bounds, DisplayId, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
     layer_shell::*, point, prelude::*, px,
 };
-use ui::Spacing;
 
 use futures::StreamExt;
 use futures_signals::signal::SignalExt;
@@ -10,36 +9,43 @@ use futures_signals::signal::SignalExt;
 use crate::config::{ActiveConfig, ConfigSignals, State};
 use crate::state::{AppState, record_window_display};
 
-use super::{Dock, DockMonitors, dock_item_count, dock_window_size, monitor_name_for_display};
+use super::{
+    Dock, DockMonitors, dock_extent, dock_item_count, dock_thickness, monitor_name_for_display,
+};
 
 fn window_options(display_id: Option<DisplayId>, cx: &App) -> WindowOptions {
     let config = &cx.config().dock;
-    let is_vertical = config.position.is_vertical();
     let compositor_state = AppState::compositor(cx).get();
     let item_count = dock_item_count(
         &compositor_state.windows,
         AppState::applications(cx).all(),
         State::pinned(cx),
         monitor_name_for_display(display_id, &compositor_state, cx).as_deref(),
-    ) + 1;
-    let window_size = dock_window_size(
-        config.position,
-        config.icon_size,
+    );
+    let window_size = dock_extent(
+        config,
         item_count,
-        config.hover_effect,
+        crate::state::display_extent(display_id, cx),
     );
 
-    let anchor = if is_vertical {
-        match config.position {
-            crate::bar::config::BarPosition::Left => Anchor::LEFT,
-            _ => Anchor::RIGHT,
-        }
+    // A stretched dock is anchored at both ends too, like the bar; a fitted
+    // one at the end it is aligned to, the margin keeping it off that end.
+    let (edge, start, end) = match config.position {
+        crate::bar::config::BarPosition::Left => (Anchor::LEFT, Anchor::TOP, Anchor::BOTTOM),
+        crate::bar::config::BarPosition::Right => (Anchor::RIGHT, Anchor::TOP, Anchor::BOTTOM),
+        crate::bar::config::BarPosition::Top => (Anchor::TOP, Anchor::LEFT, Anchor::RIGHT),
+        crate::bar::config::BarPosition::Bottom => (Anchor::BOTTOM, Anchor::LEFT, Anchor::RIGHT),
+    };
+    let anchor = if config.stretch {
+        edge | start | end
     } else {
-        match config.position {
-            crate::bar::config::BarPosition::Top => Anchor::TOP,
-            _ => Anchor::BOTTOM,
+        match config.align {
+            super::config::DockAlign::Start => edge | start,
+            super::config::DockAlign::Center => edge,
+            super::config::DockAlign::End => edge | end,
         }
     };
+    let gap = px(config.edge_gap());
 
     WindowOptions {
         display_id,
@@ -54,13 +60,12 @@ fn window_options(display_id: Option<DisplayId>, cx: &App) -> WindowOptions {
             namespace: "dock".to_string(),
             layer: Layer::Top,
             anchor,
-            exclusive_zone: None,
-            margin: Some((
-                Spacing::Medium.pixels(),
-                Spacing::Medium.pixels(),
-                Spacing::Medium.pixels(),
-                Spacing::Medium.pixels(),
-            )),
+            // Compositors add the margin on the anchored edge to this zone,
+            // so it is the thickness alone, as for the bar.
+            exclusive_zone: config
+                .reserve_space
+                .then(|| dock_thickness(config, window_size)),
+            margin: (gap > px(0.)).then_some((gap, gap, gap, gap)),
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         }),
@@ -127,11 +132,26 @@ pub fn reload(cx: &mut App) {
 }
 
 pub fn init(cx: &mut App) {
-    // Only the layer-shell anchor and the monitor set need new windows; size,
-    // pins and the rest are applied by `Dock::render`.
+    // Only the layer-shell anchor, margins, exclusive zone and the monitor
+    // set need new windows; size, pins and the rest are applied by
+    // `Dock::render`. The zone is the dock's thickness, so while it is
+    // reserved the keys that thickness derives from reopen it too.
     let layout = ConfigSignals::global(cx)
         .dock
-        .signal_ref(|dock| (dock.position, dock.monitors))
+        .signal_ref(|dock| {
+            let thickness = dock
+                .reserve_space
+                .then(|| (dock.icon_size.to_bits(), dock.hover_effect));
+            (
+                dock.position,
+                dock.monitors,
+                dock.style,
+                dock.stretch,
+                dock.align,
+                dock.reserve_space,
+                thickness,
+            )
+        })
         .dedupe()
         .to_stream();
 
@@ -142,7 +162,8 @@ pub fn init(cx: &mut App) {
 
         let mut layout = layout.skip(1);
         tracing::info!("Dock opened");
-        cx.update(open_all);
+        // The bar may have opened the dock already, to put it after itself.
+        cx.update(reload);
         while layout.next().await.is_some() {
             tracing::info!("Dock layout changed; reopening dock windows");
             cx.update(reload);

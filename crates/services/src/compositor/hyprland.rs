@@ -125,6 +125,11 @@ pub fn execute_command(cmd: CompositorCommand) -> Result<()> {
                 hyprland::shared::Address::new(address),
             )))?;
         }
+        CompositorCommand::CloseWindow(address) => {
+            Dispatch::call(DispatchType::CloseWindow(WindowIdentifier::Address(
+                hyprland::shared::Address::new(address),
+            )))?;
+        }
         CompositorCommand::Custom(dispatcher, args) => {
             Dispatch::call(DispatchType::Custom(&dispatcher, &args))?;
         }

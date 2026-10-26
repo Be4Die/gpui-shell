@@ -4,12 +4,25 @@ mod config;
 pub use config::ClockConfig;
 
 use chrono::Local;
-use gpui::{AnyElement, Context, Window, prelude::*, px};
+use gpui::{AnyElement, Context, Window, prelude::*};
 use std::time::Duration;
-use ui::{ActiveTheme, h_flex, v_flex};
+use ui::IconName;
 
-use super::{BarWidget, style};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, boxed, style};
 use crate::config::ActiveConfig;
+
+pub const fn descriptor() -> BarWidgetDescriptor {
+    BarWidgetDescriptor::new(
+        BarWidgetMeta {
+            name: "Clock",
+            aliases: &[],
+            label: "Clock",
+            description: "Current time and date.",
+            icon: IconName::Clock,
+        },
+        |cx| boxed(cx, Clock::new),
+    )
+}
 
 /// A clock widget that updates every second.
 pub struct Clock;
@@ -17,7 +30,6 @@ pub struct Clock;
 impl Clock {
     /// Create a new clock widget that auto-updates.
     pub fn new(cx: &mut Context<Self>) -> Self {
-        // Spawn a timer to update the clock every second.
         cx.spawn(async move |this, cx| {
             loop {
                 let _ = this.update(cx, |_, cx| cx.notify());
@@ -29,77 +41,64 @@ impl Clock {
         Clock
     }
 
-    fn formatted_time_horizontal(&self, format: &str) -> String {
+    fn formatted(format: &str) -> String {
         Local::now().format(format).to_string()
     }
 
-    fn formatted_time_vertical(&self, format: &str) -> Vec<String> {
-        Local::now()
-            .format(format)
-            .to_string()
+    /// One entry per non-empty line of the vertical format, falling back to
+    /// the horizontal format when it yields nothing.
+    fn lines(vertical_format: &str, horizontal_fallback: &str) -> Vec<String> {
+        let lines: Vec<String> = Self::formatted(vertical_format)
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .map(str::to_string)
-            .collect()
-    }
-
-    fn render_vertical_content(
-        &self,
-        theme: &ui::Theme,
-        vertical_format: &str,
-        horizontal_fallback: &str,
-    ) -> AnyElement {
-        let mut lines = self.formatted_time_vertical(vertical_format);
+            .collect();
         if lines.is_empty() {
-            lines.push(self.formatted_time_horizontal(horizontal_fallback));
+            vec![Self::formatted(horizontal_fallback)]
+        } else {
+            lines
         }
-
-        v_flex()
-            .id("clock")
-            .items_center()
-            .gap(px(style::CHIP_GAP))
-            .children(lines.into_iter().enumerate().map(|(idx, line)| {
-                let color = if idx == 0 {
-                    theme.colors.text_muted
-                } else {
-                    theme.colors.text
-                };
-                style::vertical_text_line(style::bar_label(line, true, color))
-            }))
-            .into_any_element()
-    }
-
-    fn render_horizontal_content(&self, theme: &ui::Theme, format: &str) -> AnyElement {
-        h_flex()
-            .id("clock")
-            .gap(px(style::CHIP_GAP))
-            .child(style::bar_label(
-                self.formatted_time_horizontal(format),
-                false,
-                theme.colors.text,
-            ))
-            .into_any_element()
     }
 }
 
 impl BarWidget for Clock {
-    fn render_vertical(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
+    fn render_vertical(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let config = &cx.config().bar.modules.clock;
+        let lines = Self::lines(&config.format_vertical, &config.format_horizontal);
+
+        style::stack(ctx)
+            .id("clock")
+            .gap(ctx.metrics.gap)
+            .children(lines.into_iter().enumerate().map(|(idx, line)| {
+                // Hours and minutes carry the time; anything after (seconds,
+                // a date) is secondary and muted.
+                let color = if idx < 2 { ctx.ink.text } else { ctx.ink.muted };
+                style::text_line(ctx, style::label_in(ctx, line, color))
+            }))
+            .into_any_element()
+    }
+
+    fn render_horizontal(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let config = &cx.config().bar.modules.clock;
 
-        self.render_vertical_content(theme, &config.format_vertical, &config.format_horizontal)
-    }
-    fn render_horizontal(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme();
-        let config = &cx.config().bar.modules.clock;
-
-        self.render_horizontal_content(theme, &config.format_horizontal)
-    }
-}
-
-impl Render for Clock {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_bar_widget(window, cx)
+        style::stack(ctx)
+            .id("clock")
+            .gap(ctx.metrics.gap)
+            .child(style::label(
+                ctx,
+                Self::formatted(&config.format_horizontal),
+            ))
+            .into_any_element()
     }
 }

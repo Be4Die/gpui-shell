@@ -59,6 +59,8 @@ Every surface is its own layer-shell window:
 | Panels              | Overlay | One at a time (control center, tray, media, sysinfo)   |
 | Launcher            | Overlay | Singleton                                              |
 | OSD, notifications  | Overlay | Transient; the shell is the notification daemon        |
+| Frame               | Top     | One per display: draws `bar.style = "frame"` and, while a panel is open, catches clicks outside it to close it |
+| Frame exclusion     | Overlay | Three invisible strips per display that keep windows inside the frame |
 
 Windows are matched to compositor monitors by output name
 (`state::monitor_for_display`), never by position or order.
@@ -75,8 +77,8 @@ Windows are matched to compositor monitors by output name
 
 ## Adding things
 
-- **Bar module:** a directory in `app/src/bar/modules/`, registered in
-  `modules/registry.rs`.
+- **Bar module:** a directory in `app/src/bar/modules/` exposing a
+  `BarWidgetDescriptor`, listed once in `modules/mod.rs`.
 - **Launcher module:** a directory in `app/src/launcher/modules/` implementing
   `LauncherPage`, registered in `modules/mod.rs`.
 - **Service:** a module in `services/src/` implementing `ManagedService`,

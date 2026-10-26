@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use crate::theme::{ActiveTheme, Color, Spacing};
+use crate::theme::{ActiveTheme, Color, Radius, Spacing};
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window, div, prelude::*, px};
 
 use crate::components::label::{Label, LabelCommon};
@@ -98,7 +98,7 @@ impl RenderOnce for Radio {
         let radio_circle = div()
             .id(self.id.clone())
             .size(outer)
-            .rounded_full()
+            .rounded(Radius::Full.pixels())
             .border_1()
             .border_color(ring_border)
             .bg(ring_bg)
@@ -110,7 +110,7 @@ impl RenderOnce for Radio {
                     .hover(|s| s.border_color(colors.border_focused))
             })
             .when(selected, |this| {
-                this.child(div().size(dot).rounded_full().bg(dot_color))
+                this.child(div().size(dot).rounded(Radius::Full.pixels()).bg(dot_color))
             })
             .when_some(
                 (!self.disabled).then_some(self.on_click).flatten(),

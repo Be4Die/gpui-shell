@@ -5,15 +5,51 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use futures_signals::signal::{Mutable, Signal};
 use gpui::{
     AnyElement, AnyWindowHandle, App, AvailableSpace, Bounds, Context, DisplayId, Entity, Global,
     Pixels, PlatformDisplay, Point, Render, Size, Window, WindowBackgroundAppearance, WindowBounds,
     WindowHandle, WindowKind, WindowOptions, div, layer_shell::*, point, prelude::*, px, size,
 };
+use serde::{Deserialize, Serialize};
 use ui::ActiveTheme;
+use ui::patterns::PanelSurface;
 
 use crate::config::BarPosition;
 use crate::launcher::Launcher;
+
+/// Behaviour shared by every panel.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelsConfig {
+    /// Close the open panel when you click anywhere outside it. That click
+    /// is not passed on to what is underneath.
+    pub close_on_click_outside: bool,
+    /// Opacity of every panel's surface (control center, notification
+    /// center, tray menus, media panel), from 0.0 to 1.0. Unset, it follows
+    /// `opacity` in `theme.toml`.
+    pub opacity: Option<f32>,
+}
+
+impl Default for PanelsConfig {
+    fn default() -> Self {
+        Self {
+            close_on_click_outside: true,
+            opacity: None,
+        }
+    }
+}
+
+/// The fill every panel paints with: the theme surface at `[panels] opacity`.
+pub trait ShellPanel: Styled + Sized {
+    fn shell_panel(self, cx: &App) -> Self;
+}
+
+impl<T: Styled> ShellPanel for T {
+    fn shell_panel(self, cx: &App) -> Self {
+        self.panel_surface_with(crate::config::Config::global(cx).panels.opacity, cx)
+    }
+}
 
 // ============================================================================
 // Panel sizing and placement
@@ -22,22 +58,14 @@ use crate::launcher::Launcher;
 /// How a panel window is sized.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PanelSize {
-    Fixed {
-        width: f32,
-        height: f32,
-    },
     /// Height follows the content, capped at `max_height` and the output.
-    FitHeight {
-        width: f32,
-        max_height: f32,
-    },
+    FitHeight { width: f32, max_height: f32 },
 }
 
 impl PanelSize {
     /// The size the window opens at: a fitted panel's cap.
     pub fn initial(&self) -> Size<Pixels> {
         match self {
-            PanelSize::Fixed { width, height } => size(px(*width), px(*height)),
             PanelSize::FitHeight { width, max_height } => size(px(*width), px(*max_height)),
         }
     }
@@ -80,6 +108,16 @@ pub fn panel_placement_from_event(
             let bounds = window.bounds();
             (bounds, bounds)
         });
+    // The panel keeps the bar's own gap from the bar and the screen edges,
+    // so it reads as part of the same layout rather than stuck to a corner.
+    let gap = px(crate::config::Config::global(cx).bar.panel_gap());
+    let usable_bounds = Bounds {
+        origin: point(usable_bounds.origin.x + gap, usable_bounds.origin.y + gap),
+        size: size(
+            (usable_bounds.size.width - gap * 2.).max(px(0.)),
+            (usable_bounds.size.height - gap * 2.).max(px(0.)),
+        ),
+    };
     let click = point(
         window.bounds().origin.x + position.x,
         window.bounds().origin.y + position.y,
@@ -310,7 +348,6 @@ pub struct PanelHost<V: Render> {
 impl<V: Render> Render for PanelHost<V> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let paint = match self.size {
-            PanelSize::Fixed { .. } => true,
             PanelSize::FitHeight { width, max_height } => self.fit.fit_height(
                 window,
                 cx,
@@ -341,6 +378,8 @@ struct OpenPanel {
 pub struct ShellWindows {
     /// Only one panel is open at a time.
     panel: Option<OpenPanel>,
+    /// Whether `panel` is set, for the frame windows that catch clicks outside it.
+    panel_open: Mutable<bool>,
     launcher: Option<WindowHandle<Launcher>>,
     displays: HashMap<AnyWindowHandle, DisplayId>,
     osd: Option<crate::osd::OsdWindowState>,
@@ -405,6 +444,33 @@ impl ShellWindows {
             .or_else(|| window.display(cx))
     }
 
+    /// How deep the shell's own exclusive zones are on each edge: the bar,
+    /// the frame's strips and, `with_dock`, a dock that reserves its space.
+    /// The compositor lays a new layer surface out inside these and counts
+    /// its margins from there, which gpui's display bounds do not know.
+    pub fn reserved_edges(cx: &App, with_dock: bool) -> gpui::Edges<Pixels> {
+        use ui::patterns::frame::edge_mut;
+        let config = crate::config::Config::global(cx);
+        let mut edges = gpui::Edges::all(px(0.));
+        let add = |edges: &mut gpui::Edges<Pixels>, edge: BarPosition, depth: f32| {
+            let slot = edge_mut(edges, edge.edge());
+            *slot += px(depth);
+        };
+        add(&mut edges, config.bar.position, config.bar.depth());
+        for (edge, thickness) in crate::frame::strips(config) {
+            add(&mut edges, edge, thickness);
+        }
+        if with_dock && config.dock.reserve_space {
+            let dock = &config.dock;
+            add(
+                &mut edges,
+                dock.position,
+                crate::dock::thickness(dock) + dock.edge_gap(),
+            );
+        }
+        edges
+    }
+
     pub(crate) fn osd(cx: &App) -> Option<crate::osd::OsdWindowState> {
         cx.try_global::<Self>()?.osd.clone()
     }
@@ -460,7 +526,7 @@ impl ShellWindows {
         display_id: Option<DisplayId>,
         build: impl FnOnce(&mut Context<V>) -> V + 'static,
     ) -> bool {
-        if let Some(open) = cx.default_global::<Self>().panel.take() {
+        if let Some(open) = Self::set_panel(cx, None) {
             // A panel that already closed itself does not count as a toggle.
             let was_open = cx
                 .update_window(open.handle, |_, window, _cx| {
@@ -504,27 +570,60 @@ impl ShellWindows {
         let size = config.size;
         let Ok(handle) = cx.open_window(window_options, move |window, cx| {
             window.set_rem_size(cx.theme().font_size);
-            cx.new(|cx| PanelHost {
-                content: cx.new(build),
-                size,
-                vertical_margin,
-                fit: WindowFit::default(),
+            let handle = window.window_handle();
+            cx.new(|cx| {
+                // Panels also close themselves (Escape, picking an entry).
+                cx.on_release(move |_, cx| Self::forget_panel(cx, handle))
+                    .detach();
+                PanelHost {
+                    content: cx.new(build),
+                    size,
+                    vertical_margin,
+                    fit: WindowFit::default(),
+                }
             })
         }) else {
             return false;
         };
 
         Self::record_display(cx, handle.into(), display_id);
-        cx.default_global::<Self>().panel = Some(OpenPanel {
-            id: panel_id.to_string(),
-            handle: handle.into(),
-        });
+        Self::set_panel(
+            cx,
+            Some(OpenPanel {
+                id: panel_id.to_string(),
+                handle: handle.into(),
+            }),
+        );
         true
+    }
+
+    /// Replace the tracked panel, returning the previous one.
+    fn set_panel(cx: &mut App, panel: Option<OpenPanel>) -> Option<OpenPanel> {
+        let this = cx.default_global::<Self>();
+        this.panel_open.set_neq(panel.is_some());
+        std::mem::replace(&mut this.panel, panel)
+    }
+
+    /// Stop tracking `handle` once its window is gone.
+    fn forget_panel(cx: &mut App, handle: AnyWindowHandle) {
+        let this = cx.default_global::<Self>();
+        if this
+            .panel
+            .as_ref()
+            .is_some_and(|open| open.handle == handle)
+        {
+            Self::set_panel(cx, None);
+        }
+    }
+
+    /// Whether a panel is open, as a signal.
+    pub fn panel_open_signal(cx: &mut App) -> impl Signal<Item = bool> + use<> {
+        cx.default_global::<Self>().panel_open.signal()
     }
 
     /// Close the open panel, if any.
     pub fn close_panel(cx: &mut App) {
-        if let Some(open) = cx.default_global::<Self>().panel.take() {
+        if let Some(open) = Self::set_panel(cx, None) {
             // A panel closing itself is mid-update and `update_window` would
             // fail, leaving it open but untracked; remove it once that ends.
             cx.defer(move |cx| {

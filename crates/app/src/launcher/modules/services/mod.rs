@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use gpui::{AnyElement, App, Context, Window, div, prelude::*, px};
 use services::{ServiceMode, ServiceStatus};
-use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Label, LabelCommon, Spacing, TextSize};
+use ui::{
+    ActiveTheme, Color, Icon, IconName, IconSize, Label, LabelCommon, Radius, Spacing, TextSize,
+};
 
 use self::config::ServicesConfig;
 use crate::config::State;
@@ -378,7 +380,7 @@ fn summary_card(summary: String, color: Color, error: Option<String>, cx: &App) 
                 .px(Spacing::Large.pixels())
                 .py(Spacing::Medium.pixels())
                 .bg(theme.colors.surface_background)
-                .rounded(px(8.))
+                .rounded(Radius::Large.pixels())
                 .flex()
                 .flex_col()
                 .gap(px(2.))

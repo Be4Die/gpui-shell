@@ -3,6 +3,7 @@
 mod config;
 pub use config::TrayConfig;
 
+use crate::windows::ShellPanel;
 use crate::windows::{PanelConfig, PanelSize, ShellWindows, panel_placement_from_event};
 use gpui::{
     AnyElement, App, ClickEvent, Context, ElementId, Pixels, Point, Render, RenderImage,
@@ -12,16 +13,28 @@ use image::{Frame, RgbaImage};
 use services::{MenuLayout, MenuLayoutProps, TrayCommand, TrayData, TrayIcon, TrayItem};
 use std::collections::HashMap;
 use std::sync::Arc;
-use ui::patterns::PanelSurface;
 use ui::{
     ActiveTheme, ButtonCommon, ButtonLike, ButtonStyle, Clickable, Color, Disableable, Divider,
     Icon, IconName, IconSize, Label, LabelCommon, List, ListItem, Spacing, TextSize,
 };
 
-use super::{BarWidget, BarWidgetShell, style};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style};
 use crate::config::{ActiveConfig, Config};
 use crate::state::AppState;
 use crate::state::watch;
+
+pub const fn descriptor() -> BarWidgetDescriptor {
+    BarWidgetDescriptor::new(
+        BarWidgetMeta {
+            name: "Systray",
+            aliases: &["Tray"],
+            label: "System tray",
+            description: "Status notifier icons from running apps.",
+            icon: IconName::Inbox,
+        },
+        |cx| boxed(cx, Tray::new),
+    )
+}
 
 /// A tray pixmap turned into an image GPUI can draw, kept across renders.
 struct CachedIcon {
@@ -239,18 +252,23 @@ impl Tray {
         .into_any_element()
     }
 
-    fn render_tray_strip(
-        &mut self,
-        items: Vec<TrayItem>,
-        icon_size: f32,
-        item_size: f32,
-        is_vertical: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        style::stack(is_vertical)
+    fn render_strip(&mut self, ctx: &BarCtx, cx: &mut Context<Self>) -> AnyElement {
+        let items: Vec<_> = self.data.items.clone();
+        // Tray icons are the bar's icon size unless the config says otherwise;
+        // the hit target keeps a unit of padding around whichever it is.
+        let icon_size = cx
+            .config()
+            .bar
+            .modules
+            .tray
+            .icon_size
+            .unwrap_or_else(|| f32::from(ctx.rhythm.icon()));
+        let item_size = icon_size + f32::from(ctx.rhythm.unit) * 2.;
+
+        style::stack(ctx)
             .id("systray")
             .justify_center()
-            .gap(px(style::group_gap(is_vertical)))
+            .gap(ctx.metrics.tray_gap)
             .children(
                 items
                     .into_iter()
@@ -265,26 +283,22 @@ impl BarWidget for Tray {
         BarWidgetShell::Group
     }
 
-    fn render_vertical(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let items: Vec<_> = self.data.items.clone();
-        let config = &cx.config().bar.modules.tray;
-        let icon_size = config.icon_size;
-        let item_size = icon_size.max(style::TRAY_ITEM_SIZE);
-        self.render_tray_strip(items, icon_size, item_size, true, cx)
+    fn render_vertical(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render_strip(ctx, cx)
     }
 
-    fn render_horizontal(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let items: Vec<_> = self.data.items.clone();
-        let config = &cx.config().bar.modules.tray;
-        let icon_size = config.icon_size;
-        let item_size = icon_size.max(style::TRAY_ITEM_SIZE);
-        self.render_tray_strip(items, icon_size, item_size, false, cx)
-    }
-}
-
-impl Render for Tray {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_bar_widget(window, cx)
+    fn render_horizontal(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render_strip(ctx, cx)
     }
 }
 
@@ -512,7 +526,7 @@ impl Render for TrayMenuPanel {
         div()
             .id("systray-menu-panel")
             .size_full()
-            .panel_surface(cx)
+            .shell_panel(cx)
             .text_color(theme.colors.text)
             .overflow_hidden()
             .child(

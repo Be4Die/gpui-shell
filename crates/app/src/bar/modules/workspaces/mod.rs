@@ -3,14 +3,32 @@
 mod config;
 pub use config::WorkspacesConfig;
 
-use gpui::{AnyElement, Context, Window, prelude::*, px};
+use gpui::{AnyElement, Context, Pixels, Window, prelude::*, px};
 use services::{CompositorCommand, CompositorState};
-use ui::{ActiveTheme, Radius, h_flex};
+use ui::{IconName, h_flex};
 
-use super::{BarWidget, BarWidgetShell, style};
+/// What one scroll-wheel line counts as, and the jitter a trackpad may
+/// send without switching workspace. Input thresholds, not layout.
+const SCROLL_LINE: Pixels = px(1.0);
+const SCROLL_DEADZONE: Pixels = px(0.5);
+
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, BarWidgetShell, boxed, style};
 use crate::config::ActiveConfig;
 use crate::state::AppState;
 use crate::state::watch;
+
+pub const fn descriptor() -> BarWidgetDescriptor {
+    BarWidgetDescriptor::new(
+        BarWidgetMeta {
+            name: "Workspaces",
+            aliases: &[],
+            label: "Workspaces",
+            description: "Workspace switcher for the compositor.",
+            icon: IconName::Layers,
+        },
+        |cx| boxed(cx, Workspaces::new),
+    )
+}
 
 /// Workspaces widget that displays workspace indicators and allows switching.
 pub struct Workspaces {
@@ -24,7 +42,6 @@ impl Workspaces {
         let compositor = AppState::compositor(cx).clone();
         let state = compositor.get();
 
-        // Subscribe to compositor state changes
         watch(cx, compositor.subscribe(), |this, new_state, cx| {
             this.state = new_state;
             cx.notify();
@@ -67,12 +84,7 @@ impl Workspaces {
             .dispatch(CompositorCommand::ScrollWorkspace(direction));
     }
 
-    fn workspace_label(
-        ws: &services::Workspace,
-        is_vertical: bool,
-        show_numbers: bool,
-        show_icons: bool,
-    ) -> String {
+    fn workspace_label(ws: &services::Workspace, show_numbers: bool, show_icons: bool) -> String {
         if !show_numbers && !show_icons {
             return String::new();
         }
@@ -91,14 +103,12 @@ impl Workspaces {
             return ws.id.to_string();
         }
 
-        if is_vertical {
-            return ws.id.to_string();
-        }
-
         if name.is_empty() {
             return ws.id.to_string();
         }
 
+        // The same label at both orientations: a vertical cell is as wide as
+        // a horizontal one is tall, so three letters still fit.
         if is_numeric_name {
             name.to_string()
         } else {
@@ -106,56 +116,52 @@ impl Workspaces {
         }
     }
 
-    fn render_workspace_pill(
+    fn render_cell(
         &self,
         ws: &services::Workspace,
         active_workspace_id: Option<i32>,
-        theme: &ui::Theme,
-        is_vertical: bool,
+        ctx: &BarCtx,
         config: &WorkspacesConfig,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let ink = ctx.ink;
+        let cell = ctx.metrics.cell;
         let workspace_id = ws.id;
         let is_active = active_workspace_id == Some(ws.id);
         let has_windows = ws.windows > 0;
         let is_urgent = ws.has_urgent && !is_active;
-        let label = Self::workspace_label(ws, is_vertical, config.show_numbers, config.show_icons);
+        let label = Self::workspace_label(ws, config.show_numbers, config.show_icons);
 
-        // Not a `ButtonLike`: the pill carries three background states
-        // (active / has windows / empty) plus an urgent border, and `ButtonStyle` has no per-state
-        // palette to express them.
+        // Not a `ButtonLike`: the cell carries three background states
+        // (active / has windows / empty) plus an urgent border, and
+        // `ButtonStyle` has no per-state palette to express them.
         h_flex()
             .id(format!("workspace-{}", ws.id))
             .justify_center()
-            .w(if is_vertical {
-                if is_active {
-                    px(style::WORKSPACE_PILL_WIDTH_ACTIVE)
-                } else {
-                    px(style::WORKSPACE_PILL_WIDTH)
-                }
-            } else if is_active {
-                px(style::WORKSPACE_PILL_WIDTH_HORIZONTAL_ACTIVE)
+            // A cell is at least its square (a pill when active) and grows
+            // with a named workspace, padded so the fill holds the text.
+            .min_w(if is_active {
+                cell.width_active
             } else {
-                px(style::WORKSPACE_PILL_WIDTH_HORIZONTAL)
+                cell.width
             })
-            .h(px(style::WORKSPACE_PILL_HEIGHT))
-            .rounded(Radius::Small.pixels())
+            .px(ctx.rhythm.unit)
+            .h(cell.height)
+            .rounded(cell.radius)
             .cursor_pointer()
             .bg(if is_active {
-                theme.colors.accent
+                ink.accent
             } else if has_windows {
-                theme.colors.elevated_surface_background
+                ink.occupied
             } else {
                 gpui::transparent_black()
             })
-            .when(is_urgent, |s| {
-                s.border_1().border_color(theme.colors.status.error)
-            })
+            .when(is_urgent, |s| s.border_1().border_color(ink.status.error))
             .hover(move |s| {
                 if is_active {
-                    s.bg(theme.colors.accent)
+                    s.bg(ink.accent)
                 } else {
-                    s.bg(theme.colors.element_hover)
+                    s.bg(ink.hover)
                 }
             })
             .on_click(cx.listener(move |this, _, _, _| {
@@ -163,27 +169,21 @@ impl Workspaces {
             }))
             .when(!label.is_empty(), |this| {
                 let color = if is_active {
-                    theme.colors.background
+                    ink.on_accent
                 } else if is_urgent {
-                    theme.colors.status.error
+                    ink.status.error
                 } else if has_windows {
-                    theme.colors.text
+                    ink.text
                 } else {
-                    theme.colors.text_muted
+                    ink.muted
                 };
-                this.child(style::bar_label(label, is_vertical, color))
+                this.child(style::label_in(ctx, label, color))
             })
             .into_any_element()
     }
 
-    fn render_workspace_strip(
-        &self,
-        theme: &ui::Theme,
-        is_vertical: bool,
-        config: &WorkspacesConfig,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn render(&self, ctx: &BarCtx, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let config = cx.config().bar.modules.workspaces.clone();
         let monitor_name = self.current_monitor_name(window, cx);
 
         // Prefer this monitor's own active tag over the compositor-wide
@@ -198,15 +198,15 @@ impl Workspaces {
             .filter(|&id| id >= 0)
             .or(self.state.active_workspace_id);
 
-        style::stack(is_vertical)
+        style::stack(ctx)
             .id("workspaces")
             .justify_center()
-            .gap(px(style::group_gap(is_vertical)))
-            .on_scroll_wheel(
-                cx.listener(|this, event: &gpui::ScrollWheelEvent, _window, _cx| {
-                    let delta = event.delta.pixel_delta(px(1.0));
-                    if delta.y.abs() > px(0.5) {
-                        let direction = if delta.y > px(0.0) { -1 } else { 1 };
+            .gap(ctx.metrics.group_gap)
+            .on_scroll(
+                cx.listener(|this, event: &gpui::ScrollEvent, _window, _cx| {
+                    let delta = event.delta.pixel_delta(SCROLL_LINE);
+                    if delta.y.abs() > SCROLL_DEADZONE {
+                        let direction = if delta.y > Pixels::ZERO { -1 } else { 1 };
                         this.scroll_workspace(direction);
                     }
                 }),
@@ -221,16 +221,7 @@ impl Workspaces {
                             .as_deref()
                             .is_none_or(|name| ws.monitor == name)
                     })
-                    .map(|ws| {
-                        self.render_workspace_pill(
-                            ws,
-                            active_workspace_id,
-                            theme,
-                            is_vertical,
-                            config,
-                            cx,
-                        )
-                    }),
+                    .map(|ws| self.render_cell(ws, active_workspace_id, ctx, &config, cx)),
             )
             .into_any_element()
     }
@@ -241,21 +232,21 @@ impl BarWidget for Workspaces {
         BarWidgetShell::Group
     }
 
-    fn render_vertical(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let config = cx.config().bar.modules.workspaces.clone();
-        self.render_workspace_strip(&theme, true, &config, window, cx)
+    fn render_vertical(
+        &mut self,
+        ctx: &BarCtx,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render(ctx, window, cx)
     }
 
-    fn render_horizontal(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let config = cx.config().bar.modules.workspaces.clone();
-        self.render_workspace_strip(&theme, false, &config, window, cx)
-    }
-}
-
-impl Render for Workspaces {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_bar_widget(window, cx)
+    fn render_horizontal(
+        &mut self,
+        ctx: &BarCtx,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render(ctx, window, cx)
     }
 }

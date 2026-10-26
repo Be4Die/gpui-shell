@@ -18,9 +18,45 @@ desktop ecosystems via D-Bus while providing a modern, GPU-accelerated UI.
 
 ## Showcase
 
-![Bar](./docs/public/bar.png)
+![Desktop](./docs/public/showcase/desktop.png)
 
 https://github.com/user-attachments/assets/71003c4b-8b02-4585-8ddb-17560c27b389
+
+### One shell, many looks
+
+The floating bar above is the default. Every other look is config only: `bar.style`, `radius_scale` and `opacity`
+in `theme.toml`, and a Base16 palette.
+
+| | |
+|---|---|
+| Blocky, `radius_scale = 0` | ![Blocky bar](./docs/public/showcase/bar-blocky.png) |
+| Bubbles | ![Bubbles bar](./docs/public/showcase/bar-bubbles.png) |
+| Frame | ![Frame bar](./docs/public/showcase/bar-frame.png) |
+| Light palette | ![Light bar](./docs/public/showcase/bar-light.png) |
+
+| Blocky | Light |
+|---|---|
+| ![Blocky look](./docs/public/showcase/look-blocky-launcher.png) | ![Light look](./docs/public/showcase/look-light-launcher.png) |
+| **Frame** | **Vertical** |
+| ![Frame look](./docs/public/showcase/look-frame.png) | ![Vertical bar](./docs/public/showcase/look-vertical.png) |
+
+### Launcher
+
+| Apps `@` | Help `?` |
+|---|---|
+| ![Apps](./docs/public/showcase/launcher-apps.png) | ![Help](./docs/public/showcase/launcher-help.png) |
+| **Wallpapers `;wp`** | **Themes `~`** |
+| ![Wallpapers](./docs/public/showcase/launcher-wallpaper.png) | ![Themes](./docs/public/showcase/launcher-themes.png) |
+| **Config editor `;cfg`** | **Services `;s`** |
+| ![Config editor](./docs/public/showcase/launcher-config-editor.png) | ![Services](./docs/public/showcase/launcher-services.png) |
+| **System info `;sys`** | **Media `;m`** |
+| ![System info](./docs/public/showcase/launcher-sysinfo.png) | ![Media](./docs/public/showcase/launcher-media.png) |
+| **Calculator `=`** | **Web search `!`** |
+| ![Calculator](./docs/public/showcase/launcher-calculator.png) | ![Web search](./docs/public/showcase/launcher-web.png) |
+
+### Control center
+
+![Control center](./docs/public/showcase/control-center.png)
 
 ## Features
 

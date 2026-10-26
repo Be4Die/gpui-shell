@@ -1,7 +1,7 @@
+use crate::windows::ShellPanel;
 use gpui::prelude::*;
-use gpui::{Context, MouseButton, Render, ScrollHandle, Window, div, px};
+use gpui::{Context, MouseButton, Render, ScrollHandle, Window, div};
 use services::{NotificationCommand, NotificationData, NotificationSubscriber};
-use ui::patterns::PanelSurface;
 use ui::{ActiveTheme, Color, Icon, IconSize, Radius, Spacing, TextSize};
 
 use crate::config::ActiveConfig;
@@ -34,7 +34,7 @@ impl NotificationCenter {
 }
 
 impl Render for NotificationCenter {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl gpui::IntoElement {
         let theme = cx.theme();
         let config = &cx.config().notification;
         let notifications = self.data.notifications.clone();
@@ -45,11 +45,9 @@ impl Render for NotificationCenter {
         let list_content = if has_notifications {
             div()
                 .children(notifications.into_iter().map(|item| {
-                    let dismiss_subscriber = self.subscriber.clone();
-                    let id = item.id;
                     let clicked = item.clone();
                     div()
-                        .relative()
+                        .id(("notification-card", item.id))
                         .w_full()
                         .p(Spacing::Medium.pixels())
                         .rounded(Radius::Large.pixels())
@@ -70,31 +68,11 @@ impl Render for NotificationCenter {
                         })
                         .child(notification_card_body(
                             &item,
+                            window,
                             cx,
-                            true,
                             false,
                             &self.subscriber,
                         ))
-                        .child(
-                            div()
-                                .absolute()
-                                .top(px(8.0))
-                                .right(px(8.0))
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |_, _, _, cx| {
-                                        cx.stop_propagation();
-                                        dismiss_subscriber
-                                            .dispatch(NotificationCommand::Dismiss(id));
-                                    }),
-                                )
-                                .child(
-                                    Icon::new(config.icons.close())
-                                        .size(IconSize::XSmall)
-                                        .color(Color::Muted),
-                                ),
-                        )
                 }))
                 .into_any_element()
         } else {
@@ -110,7 +88,7 @@ impl Render for NotificationCenter {
         div()
             .id("notification-center")
             .size_full()
-            .panel_surface(cx)
+            .shell_panel(cx)
             .p(Spacing::Medium.pixels())
             .flex()
             .flex_col()

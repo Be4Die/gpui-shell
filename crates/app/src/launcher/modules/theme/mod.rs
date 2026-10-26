@@ -1,24 +1,27 @@
-//! Theme browser module: the active theme up top, the scheme registry's
-//! download/update control, and the list filtered by where a scheme comes
-//! from. Schemes, the stylix palette and registry status load off the UI
-//! thread; so does fetching a provider.
+//! Theme browser module: the active theme up top and the list filtered by
+//! where a scheme comes from; the button beside the filters opens the
+//! registries page that downloads and updates providers. Schemes, the stylix
+//! palette and registry status load off the UI thread; so does fetching a
+//! provider.
 
+mod appearance;
 pub mod config;
+mod registry;
 
 use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use gpui::{
-    AnyElement, App, ClickEvent, Context, FontWeight, Hsla, Pixels, SharedString, Window, div,
-    prelude::*, px,
+    AnyElement, App, Context, FontWeight, Hsla, Pixels, SharedString, Window, div, prelude::*, px,
 };
 use services::{THEME_PROVIDERS, ThemeProvider, ThemeRepository, load_stylix_scheme};
 use ui::{
-    ActiveTheme, Base16Palette, Color, Icon, IconName, IconSize, Radius, Spacing, Spinner,
-    TextSize, Theme, builtin_schemes,
+    ActiveTheme, Base16Palette, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize, Theme,
+    builtin_schemes,
 };
 
 use self::config::ThemesConfig;
+use self::registry::RegistryPage;
 use crate::config::Config;
 use crate::launcher::action::{Action, ActionPanel, Outcome};
 use crate::launcher::content::{Content, Dropdown, DropdownItem, EmptyView, Item, List, Section};
@@ -298,6 +301,31 @@ impl ThemeModule {
             .iter()
             .find(|entry| palette_is_active(&entry.palette, theme))
     }
+
+    /// Opens the registries page.
+    fn registry_action(&self, cx: &Context<Self>) -> Action {
+        let module = cx.weak_entity();
+        Action::new("Manage Registries", move |_, cx| match module.upgrade() {
+            Some(module) => Outcome::push(cx.new(|cx| RegistryPage::new(module, cx))),
+            None => Outcome::Stay,
+        })
+        .icon(Source::Registry.icon())
+    }
+
+    /// The button beside the filters; its label says what the registries
+    /// are up to.
+    fn registry_button(&self, cx: &Context<Self>) -> Action {
+        let (title, icon) = if !self.fetching.is_empty() {
+            ("Updating…", IconName::Refresh)
+        } else if !self.fetch_errors.is_empty() {
+            ("Update failed", IconName::CircleAlert)
+        } else if self.registries.iter().all(|registry| !registry.cached) {
+            ("Download themes", IconName::Download)
+        } else {
+            ("Registries", Source::Registry.icon())
+        };
+        self.registry_action(cx).title(title).icon(icon)
+    }
 }
 
 fn load() -> Loaded {
@@ -374,14 +402,19 @@ fn hex_palette(p: &services::Base16Palette) -> Result<Base16Palette, ()> {
 }
 
 /// Make `palette` the theme and save it to `theme.toml`, keeping the user's
-/// font size and token overrides.
+/// font size, radius scale, opacity and token overrides.
 pub(crate) fn apply_palette(name: SharedString, palette: Base16Palette, cx: &mut App) {
     let mut theme = cx.theme().clone();
     theme.set_palette(name, palette);
+    apply_theme(theme, cx);
+}
+
+/// Install `theme` and save it to `theme.toml`.
+pub(crate) fn apply_theme(theme: Theme, cx: &mut App) {
     Theme::set(theme.clone(), cx);
     cx.background_spawn(async move {
         if let Err(err) = Config::save_theme_value(&theme) {
-            tracing::warn!("Failed to persist selected theme: {err}");
+            tracing::warn!("Failed to persist theme: {err}");
         }
     })
     .detach();
@@ -414,6 +447,7 @@ impl LauncherPage for ThemeModule {
             }
             dropdown = dropdown.item(item);
         }
+        dropdown = dropdown.trailing(self.registry_button(cx));
 
         let mut list = List::new()
             .placeholder("Search themes...")
@@ -430,6 +464,12 @@ impl LauncherPage for ThemeModule {
             if !items.is_empty() {
                 list = list.section(Section::new(source.label()).items(items));
             }
+        }
+        // The non-colour knobs live on their own page; the list is schemes.
+        // Last, and only when no source filter is on, so it never gets in
+        // the way of browsing - searching "font" or "opacity" finds it.
+        if self.filter == Filter::All {
+            list = list.section(Section::new("More").item(appearance::entry_row(cx)));
         }
         list.into()
     }
@@ -465,27 +505,11 @@ impl LauncherPage for ThemeModule {
     ) -> Option<AnyElement> {
         let theme = cx.theme().clone();
         let current = self.current_entry(&theme).cloned();
-
-        let registries = self.registries.clone().into_iter().map(|registry| {
-            let provider = registry.provider;
-            let fetching = self.fetching.contains(provider.id);
-            let error = self.fetch_errors.get(provider.id).cloned();
-            render_registry_row(&registry, fetching, error, &theme).on_click(cx.listener(
-                move |this, _: &ClickEvent, _, cx| {
-                    this.fetch(provider, cx);
-                },
-            ))
-        });
-
         Some(
             div()
-                .flex()
-                .flex_col()
-                .gap(Spacing::Small.pixels())
                 .px(Spacing::Medium.pixels())
                 .pt(Spacing::XSmall.pixels())
                 .child(render_current_card(&theme, current.as_ref()))
-                .children(registries)
                 .into_any_element(),
         )
     }
@@ -493,7 +517,7 @@ impl LauncherPage for ThemeModule {
 
 impl ThemeModule {
     fn item(&self, ix: usize, entry: &Entry, cx: &Context<Self>) -> Item {
-        let mut actions = ActionPanel::new()
+        let actions = ActionPanel::new()
             .action(
                 Action::listener("Apply", cx, move |this, _, cx| {
                     if let Some(entry) = this.entries.get(ix) {
@@ -503,25 +527,8 @@ impl ThemeModule {
                 })
                 .icon(IconName::Check),
             )
-            .action(Action::copy(entry.name.clone()).title("Copy Name"));
-        let registries = self.registries.iter().map(|registry| {
-            let provider = registry.provider;
-            let verb = if registry.cached {
-                "Update"
-            } else {
-                "Download"
-            };
-            Action::listener(
-                format!("{verb} {}", provider.name),
-                cx,
-                move |this, _, cx| {
-                    this.fetch(provider, cx);
-                    Outcome::Stay
-                },
-            )
-            .icon(IconName::Download)
-        });
-        actions = actions.section("Registries", registries);
+            .action(Action::copy(entry.name.clone()).title("Copy Name"))
+            .action(self.registry_action(cx).shortcut("ctrl-o"));
 
         Item::new(ix.to_string(), entry.title())
             .subtitle(entry.detail.clone())
@@ -534,7 +541,7 @@ impl ThemeModule {
         match self.filter {
             Filter::Source(Source::Registry) if registry.is_some_and(|r| !r.cached) => {
                 EmptyView::new("No registry schemes yet")
-                    .description("Download the registry above to browse its schemes")
+                    .description("Open Registries beside the filters to download them")
                     .icon(IconName::Download)
             }
             Filter::Source(Source::Wallpaper) if self.count(Source::Wallpaper) == 0 => {
@@ -581,10 +588,12 @@ fn render_current_card(theme: &Theme, current: Option<&Entry>) -> AnyElement {
     }
 
     let row = |colors: [Hsla; 8]| {
-        div()
-            .flex()
-            .gap(px(2.))
-            .children(colors.map(|color| div().size(px(11.)).rounded(px(2.)).bg(color)))
+        div().flex().gap(px(2.)).children(colors.map(|color| {
+            div()
+                .size(px(11.))
+                .rounded(Radius::XSmall.pixels())
+                .bg(color)
+        }))
     };
 
     div()
@@ -648,123 +657,6 @@ fn render_current_card(theme: &Theme, current: Option<&Entry>) -> AnyElement {
                 ])),
         )
         .into_any_element()
-}
-
-/// One provider: what is cached, how fresh it is, and the button that
-/// clones or pulls it.
-fn render_registry_row(
-    registry: &Registry,
-    fetching: bool,
-    error: Option<SharedString>,
-    theme: &Theme,
-) -> gpui::Stateful<gpui::Div> {
-    let colors = theme.colors();
-    let provider = registry.provider;
-
-    let (detail, detail_color) = match (&error, registry.cached) {
-        (Some(error), _) => (error.clone(), colors.status.error),
-        (None, true) => {
-            let mut detail = format!("{} schemes", registry.schemes);
-            if let Some(updated) = registry.updated {
-                detail.push_str(&format!(" · updated {}", format_age(updated)));
-            }
-            (detail.into(), colors.text_muted)
-        }
-        (None, false) => (
-            format!("Not downloaded · {}", provider.repo).into(),
-            colors.text_muted,
-        ),
-    };
-
-    let (action, action_icon) = if fetching {
-        (
-            if registry.cached {
-                "Updating…"
-            } else {
-                "Cloning…"
-            },
-            None,
-        )
-    } else if registry.cached {
-        ("Update", Some(IconName::Refresh))
-    } else {
-        ("Download", Some(IconName::Download))
-    };
-
-    div()
-        .id(provider.id)
-        .w_full()
-        .px(Spacing::Large.pixels())
-        .py(Spacing::Small.pixels())
-        .rounded(Radius::Medium.pixels())
-        .border_1()
-        .border_color(colors.border_variant)
-        .when(!fetching, |el| {
-            el.cursor_pointer()
-                .hover(|s| s.bg(colors.element_hover).border_color(colors.border))
-        })
-        .flex()
-        .items_center()
-        .gap(Spacing::Medium.pixels())
-        .child(
-            Icon::new(Source::Registry.icon())
-                .size(IconSize::Small)
-                .color(Color::Muted),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.))
-                .flex()
-                .items_baseline()
-                .gap(Spacing::Medium.pixels())
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(TextSize::Small.rems())
-                        .text_color(colors.text)
-                        .font_weight(FontWeight::MEDIUM)
-                        .child(provider.name),
-                )
-                .child(
-                    div()
-                        .min_w(px(0.))
-                        .text_size(TextSize::XSmall.rems())
-                        .text_color(detail_color)
-                        .truncate()
-                        .child(detail),
-                ),
-        )
-        .child(
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(Spacing::XSmall.pixels())
-                .px(Spacing::Medium.pixels())
-                .py(px(3.))
-                .rounded_full()
-                .bg(if fetching {
-                    colors.element_background
-                } else {
-                    colors.element_selected
-                })
-                .text_size(TextSize::XSmall.rems())
-                .text_color(if fetching {
-                    colors.text_muted
-                } else {
-                    colors.text_accent
-                })
-                .font_weight(FontWeight::MEDIUM)
-                .when(fetching, |el| {
-                    el.child(Spinner::new().size(IconSize::XSmall).color(Color::Muted))
-                })
-                .children(
-                    action_icon
-                        .map(|icon| Icon::new(icon).size(IconSize::XSmall).color(Color::Accent)),
-                )
-                .child(action),
-        )
 }
 
 fn render_theme_card(entry: &Entry, selected: bool, active: bool, theme: &Theme) -> AnyElement {
@@ -873,7 +765,7 @@ fn preview_tile(p: &Base16Palette, (width, height): (Pixels, Pixels)) -> impl In
                 .flex()
                 .items_center()
                 .pl(px(3.))
-                .child(div().size(line).rounded_full().bg(p.base08)),
+                .child(div().size(line).rounded(Radius::Full.pixels()).bg(p.base08)),
         )
         .child(
             div()
@@ -883,12 +775,24 @@ fn preview_tile(p: &Base16Palette, (width, height): (Pixels, Pixels)) -> impl In
                 .flex_col()
                 .justify_center()
                 .gap(line)
-                .child(div().h(line).w(width * 0.55).rounded_full().bg(p.base05))
-                .child(div().h(line).w(width * 0.35).rounded_full().bg(p.base03))
+                .child(
+                    div()
+                        .h(line)
+                        .w(width * 0.55)
+                        .rounded(Radius::Full.pixels())
+                        .bg(p.base05),
+                )
+                .child(
+                    div()
+                        .h(line)
+                        .w(width * 0.35)
+                        .rounded(Radius::Full.pixels())
+                        .bg(p.base03),
+                )
                 .child(
                     div().flex().gap(px(2.)).children(
                         [p.base0d, p.base0b, p.base0a, p.base0e]
-                            .map(|color| div().size(dot).rounded_full().bg(color)),
+                            .map(|color| div().size(dot).rounded(Radius::Full.pixels()).bg(color)),
                     ),
                 ),
         )
@@ -898,7 +802,7 @@ fn swatches(colors: impl IntoIterator<Item = Hsla>, size: Pixels) -> impl IntoEl
     div().flex().items_center().gap(px(2.)).children(
         colors
             .into_iter()
-            .map(move |color| div().size(size).rounded(px(3.)).bg(color)),
+            .map(move |color| div().size(size).rounded(Radius::Small.pixels()).bg(color)),
     )
 }
 

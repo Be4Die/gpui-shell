@@ -1,7 +1,7 @@
 //! Notification service implementing org.freedesktop.Notifications.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -17,7 +17,7 @@ use zbus::{
     names::{BusName, UniqueName, WellKnownName},
     object_server::SignalEmitter,
     proxy,
-    zvariant::OwnedValue,
+    zvariant::{OwnedValue, Structure},
 };
 
 use crate::ServiceStatus;
@@ -49,6 +49,9 @@ pub struct Notification {
     pub urgency: u8,
     pub timeout_ms: i32,
     pub timestamp_ms: i64,
+    /// When the popup goes on its own, in unix ms; `None` keeps it until
+    /// dismissed. Moves forward by however long the popups were held.
+    pub expires_at_ms: Option<i64>,
     pub actions: Vec<(String, String)>,
     pub read: bool,
     /// `desktop-entry` hint, without `.desktop`.
@@ -80,6 +83,9 @@ pub struct NotificationData {
     /// Shared so a write hands each subscriber pointers, not copies.
     pub notifications: Vec<Arc<Notification>>,
     pub popup_ids: Vec<u32>,
+    /// Set while the pointer holds the popups: their countdowns stand still
+    /// at this instant.
+    pub popups_held_since_ms: Option<i64>,
     pub dnd: bool,
     pub unread_count: usize,
 }
@@ -102,6 +108,7 @@ impl NotificationData {
 pub enum LocalSlot {
     ConfigError,
     ThemeError,
+    ConfigWriteError,
 }
 
 impl LocalSlot {
@@ -161,6 +168,11 @@ impl NotificationSubscriber {
             .filter_map(|id| data.notifications.iter().find(|n| n.id == *id).cloned())
             .take(limit)
             .collect()
+    }
+
+    /// The instant the popups' countdowns froze at, while they are held.
+    pub fn popups_held_since_ms(&self) -> Option<i64> {
+        self.data.lock_ref().popups_held_since_ms
     }
 
     /// Post a notification from the shell itself. We *are* the notification
@@ -231,6 +243,26 @@ impl NotificationSubscriber {
                 data.recompute_unread();
             }
             NotificationCommand::HoldPopups(held) => {
+                if *self.popups_held.borrow() == held {
+                    return;
+                }
+                {
+                    let mut data = self.data.lock_mut();
+                    if held {
+                        data.popups_held_since_ms = Some(now_ms());
+                    } else if let Some(since) = data.popups_held_since_ms.take() {
+                        // Deadlines move before the timers wake, so none fires on a stale one.
+                        let shift = now_ms().saturating_sub(since);
+                        let popups = data.popup_ids.clone();
+                        for item in data.notifications.iter_mut() {
+                            if let Some(at) = item.expires_at_ms
+                                && popups.contains(&item.id)
+                            {
+                                Arc::make_mut(item).expires_at_ms = Some(at + shift);
+                            }
+                        }
+                    }
+                }
                 self.popups_held.send_replace(held);
             }
             command if !self.lifecycle.is_up() => {
@@ -365,6 +397,7 @@ impl ManagedService for NotificationSubscriber {
 
         tokio::spawn(async move {
             let _registration = REGISTRATION.lock().await;
+            let _ = tokio::task::spawn_blocking(prune_image_cache).await;
             if !token.alive() {
                 return;
             }
@@ -548,20 +581,31 @@ impl NotificationServer {
         // unlink it shortly after sending the notification, so only keep paths
         // that still exist by the time we parse the hints - otherwise gpui's
         // asset cache logs a load error for a file that's already gone.
-        let image_path = hint_string(&hints, &["image-path", "image_path"])
-            .map(|p| normalize_path(&p))
-            .filter(|p| p.exists());
-        let app_icon_path = if is_image_source(app_icon) {
-            Some(normalize_path(app_icon)).filter(|p| p.exists())
-        } else {
-            hint_string(&hints, &["app_icon", "icon-path", "icon_path"])
+        // Image priority follows the spec: `image-data`, `image-path`, then an
+        // `app_icon` that is a file. A file `app_icon` beside a real image is
+        // the app icon; one that became the image (a screenshot) is not shown
+        // twice.
+        let app_icon_file = is_image_source(app_icon).then(|| normalize_path(app_icon));
+        let hinted_image = cache_image_data(&hints, id).or_else(|| {
+            hint_string(&hints, &["image-path", "image_path"])
+                .and_then(|p| cache_image_file(&normalize_path(&p), id))
+        });
+        let icon_is_image = hinted_image.is_none() && app_icon_file.is_some();
+        let image_path = hinted_image.or_else(|| {
+            let icon_file = app_icon_file.as_deref()?;
+            cache_image_file(icon_file, id)
+        });
+        let app_icon_path = match &app_icon_file {
+            Some(_) if icon_is_image => None,
+            Some(file) => Some(file.clone()),
+            None => hint_string(&hints, &["app_icon", "icon-path", "icon_path"])
                 .filter(|value| is_image_source(value))
-                .map(|p| normalize_path(&p))
-                .filter(|p| p.exists())
-        };
+                .map(|p| normalize_path(&p)),
+        }
+        .and_then(|p| cache_image_file(&p, id));
         // Fallback: resolve named icon via XDG icon theme lookup
         let app_icon_path = app_icon_path.or_else(|| {
-            if !app_icon.is_empty() {
+            if !app_icon.is_empty() && app_icon_file.is_none() {
                 lookup_icon(app_icon)
             } else {
                 None
@@ -589,6 +633,7 @@ impl NotificationServer {
             })
             .collect();
 
+        let timestamp_ms = now_ms();
         let notification = Notification {
             id,
             app_name: app_name.to_string(),
@@ -599,7 +644,8 @@ impl NotificationServer {
             body: body.to_string(),
             urgency,
             timeout_ms,
-            timestamp_ms: Utc::now().timestamp_millis(),
+            timestamp_ms,
+            expires_at_ms: (timeout_ms > 0).then(|| timestamp_ms + i64::from(timeout_ms)),
             actions: parsed_actions,
             read: false,
             desktop_entry,
@@ -632,9 +678,23 @@ impl NotificationServer {
             let timer_generations = self.timer_generations.clone();
             let popups_held = self.popups_held.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(timeout_ms as u64)).await;
-                // Err only once the subscriber is gone; expire anyway.
-                let _ = popups_held.subscribe().wait_for(|held| !held).await;
+                let mut held = popups_held.subscribe();
+                // The deadline moves while the popups are held, so sleep up
+                // to it, then check again; one that is no longer a popup
+                // (dismissed, do-not-disturb) still closes for its sender.
+                while let Some(deadline) = popup_deadline(&data, id) {
+                    let remaining = deadline - now_ms();
+                    if remaining > 0 {
+                        tokio::time::sleep(Duration::from_millis(remaining as u64)).await;
+                    } else if *held.borrow() {
+                        // Err only once the subscriber is gone; expire anyway.
+                        if held.wait_for(|held| !held).await.is_err() {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
 
                 let should_close = timer_generations
                     .lock()
@@ -705,7 +765,10 @@ impl NotificationServer {
 /// it hands out, so counting from 1 again would quietly delete old entries.
 /// Local slot ids live at the top of the range and are skipped.
 fn first_free_id(data: &NotificationData) -> u32 {
-    let lowest_slot = LocalSlot::ConfigError.id().min(LocalSlot::ThemeError.id());
+    let lowest_slot = LocalSlot::ConfigError
+        .id()
+        .min(LocalSlot::ThemeError.id())
+        .min(LocalSlot::ConfigWriteError.id());
     data.notifications
         .iter()
         .map(|n| n.id)
@@ -721,6 +784,22 @@ fn remove_notification(data: &Mutable<NotificationData>, id: u32) -> bool {
     state.popup_ids.retain(|x| *x != id);
     state.recompute_unread();
     len_before != state.notifications.len()
+}
+
+fn now_ms() -> i64 {
+    Utc::now().timestamp_millis()
+}
+
+/// When `id`'s popup is due, while it is one and has a deadline.
+fn popup_deadline(data: &Mutable<NotificationData>, id: u32) -> Option<i64> {
+    let data = data.lock_ref();
+    if !data.popup_ids.contains(&id) {
+        return None;
+    }
+    data.notifications
+        .iter()
+        .find(|n| n.id == id)?
+        .expires_at_ms
 }
 
 fn deactivate_notification(data: &Mutable<NotificationData>, id: u32) -> bool {
@@ -791,6 +870,100 @@ fn hex_nibble(b: u8) -> Option<u8> {
 trait Notifications {
     #[zbus(name = "CloseNotification")]
     fn close_notification(&self, id: u32) -> zbus::Result<()>;
+}
+
+/// Senders unlink temp images right after `Notify` and `image-data` only
+/// lives in the message, so every image is copied here before it is shown.
+fn image_cache_dir() -> PathBuf {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
+            PathBuf::from(home).join(".cache")
+        });
+    base.join("gpuishell").join("notifications")
+}
+
+/// Drop cached images older than a day; the history never keeps one longer.
+fn prune_image_cache() {
+    let Ok(entries) = std::fs::read_dir(image_cache_dir()) else {
+        return;
+    };
+    let cutoff = std::time::SystemTime::now() - Duration::from_secs(24 * 60 * 60);
+    for entry in entries.flatten() {
+        let stale = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .map(|modified| modified < cutoff)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn cache_image_file(source: &Path, id: u32) -> Option<PathBuf> {
+    let bytes = std::fs::read(source).ok()?;
+    let ext = source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("img");
+    write_cached(id, ext, &bytes)
+}
+
+fn write_cached(id: u32, ext: &str, bytes: &[u8]) -> Option<PathBuf> {
+    let dir = image_cache_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    // Unique per notification, so gpui's image cache never serves a replaced one.
+    let path = dir.join(format!("{id}-{}.{ext}", Utc::now().timestamp_millis()));
+    std::fs::write(&path, bytes).ok()?;
+    Some(path)
+}
+
+/// `image-data` (`iibiiay`): width, height, row stride, has alpha, bits per
+/// sample, channels, pixels. Written out as a PNG.
+fn cache_image_data(hints: &HashMap<String, OwnedValue>, id: u32) -> Option<PathBuf> {
+    let value = ["image-data", "image_data", "icon_data"]
+        .iter()
+        .find_map(|key| hints.get(*key))?;
+    let structure = Structure::try_from(value.clone()).ok()?;
+    let fields = structure.fields();
+    if fields.len() != 7 {
+        return None;
+    }
+    let width = i32::try_from(&fields[0]).ok()?;
+    let height = i32::try_from(&fields[1]).ok()?;
+    let stride = i32::try_from(&fields[2]).ok()?;
+    let has_alpha = bool::try_from(&fields[3]).ok()?;
+    let bits = i32::try_from(&fields[4]).ok()?;
+    let channels = i32::try_from(&fields[5]).ok()?;
+    let data = Vec::<u8>::try_from(fields[6].clone()).ok()?;
+    if bits != 8 || width <= 0 || height <= 0 || channels < 3 || (has_alpha && channels < 4) {
+        return None;
+    }
+    let (width, height, stride, channels) = (
+        width as usize,
+        height as usize,
+        stride as usize,
+        channels as usize,
+    );
+    let mut rgba = image::RgbaImage::new(width as u32, height as u32);
+    for y in 0..height {
+        for x in 0..width {
+            let start = y * stride + x * channels;
+            let px = data.get(start..start + channels)?;
+            let alpha = if has_alpha { px[3] } else { 255 };
+            rgba.put_pixel(
+                x as u32,
+                y as u32,
+                image::Rgba([px[0], px[1], px[2], alpha]),
+            );
+        }
+    }
+    let mut png = Vec::new();
+    rgba.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    write_cached(id, "png", &png)
 }
 
 #[cfg(test)]

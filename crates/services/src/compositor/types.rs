@@ -198,6 +198,8 @@ pub enum CompositorCommand {
     NextKeyboardLayout,
     /// Focus a specific window by its `Window.id`.
     FocusWindow(String),
+    /// Ask a window to close, by its `Window.id`.
+    CloseWindow(String),
     /// Custom dispatcher command (dispatcher name, arguments).
     Custom(String, String),
 }

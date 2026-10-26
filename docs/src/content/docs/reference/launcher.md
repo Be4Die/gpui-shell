@@ -70,6 +70,44 @@ View the health status of all system services (Audio, Network, Bluetooth, UPower
 prefix = ";s"
 ```
 
+### Config Module
+
+Edit `config.toml` from the launcher. Every section is a list of settings: Enter toggles a boolean, opens a choice list for an enum, or turns the search line into the value for numbers and text. The selected setting's detail pane shows its key and default plus a mouse control (switch, slider, buttons). The bar's **Layout** entry opens a custom editor to reorder widgets, move them between slots, add or remove them.
+
+Edits apply immediately so you can preview them, and are kept in memory until you save with `Ctrl+S` (or discard with `Ctrl+Shift+D`). Saving rewrites only the changed keys through `toml_edit`, so comments and formatting are preserved; a file that no longer parses is never written.
+
+**Invoke with:** `;cfg`
+
+| Option    | Type     | Default  | Description                              |
+| --------- | -------- | -------- | ---------------------------------------- |
+| `prefix`  | `string` | `";cfg"` | Command prefix to invoke the config module. |
+
+#### Example
+
+```toml
+[launcher.modules.config]
+prefix = ";cfg"
+```
+
+### Config Module
+
+Edit `config.toml` from the launcher. The root lists the config sections; selecting one shows its whole form in the detail pane (switches, sliders, choice buttons), and `Tab` lists every setting's keyboard action, so most edits need no navigation. `Enter` opens the section as rows grouped by topic, where `Enter` toggles a boolean, picks from a list, or turns the search line into the value for numbers and text. The bar's **Layout** entry opens a custom editor to reorder widgets, move them between slots, add or remove them.
+
+Edits apply immediately so you can preview them, and stay in memory until you save with `Ctrl+S` (or discard with `Ctrl+Shift+D`). Saving rewrites only the changed keys, so comments and formatting are preserved; a file that no longer parses is never written.
+
+**Invoke with:** `;cfg`
+
+| Option    | Type     | Default  | Description                                 |
+| --------- | -------- | -------- | ------------------------------------------- |
+| `prefix`  | `string` | `";cfg"` | Command prefix to invoke the config module. |
+
+#### Example
+
+```toml
+[launcher.modules.config]
+prefix = ";cfg"
+```
+
 ## Keyboard Shortcuts
 
 The launcher supports vim-style navigation via Ctrl key combinations alongside standard keys.

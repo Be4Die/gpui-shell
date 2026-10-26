@@ -29,6 +29,7 @@ mod wifi;
 pub use config::{ControlCenterConfig, PowerActionsConfig};
 
 use crate::icons;
+use crate::windows::ShellPanel;
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, MouseButton, Task, Window, div, prelude::*, px,
 };
@@ -36,7 +37,10 @@ use services::{ChargeLimit, UPowerCommand};
 use ui::patterns::PanelSurface;
 use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize};
 
+use crate::config::ActiveConfig;
+use crate::launcher;
 use crate::state::{AppState, watch, watch_task};
+use crate::windows::ShellWindows;
 
 pub use quick_toggles::ExpandedSection;
 use wifi::WifiSection;
@@ -213,7 +217,7 @@ impl Render for ControlCenter {
             .key_context("ControlCenter")
             .w_full()
             .p(Spacing::Large.pixels())
-            .panel_surface(cx)
+            .shell_panel(cx)
             .text_color(theme.colors.text)
             .flex()
             .flex_col()
@@ -227,6 +231,9 @@ impl Render for ControlCenter {
                     .child(
                         div()
                             .flex_1()
+                            // Shrinkable, so a long status line truncates
+                            // instead of pushing the buttons off the panel.
+                            .min_w(px(0.))
                             .flex()
                             .items_center()
                             .gap(Spacing::Medium.pixels())
@@ -236,6 +243,7 @@ impl Render for ControlCenter {
                             .child(
                                 div()
                                     .flex_1()
+                                    .min_w(px(0.))
                                     .flex()
                                     .items_center()
                                     .gap(Spacing::Medium.pixels())
@@ -248,6 +256,7 @@ impl Render for ControlCenter {
                                         div()
                                             .flex()
                                             .flex_col()
+                                            .min_w(px(0.))
                                             .gap(px(2.))
                                             .child(
                                                 div()
@@ -259,6 +268,7 @@ impl Render for ControlCenter {
                                                 div()
                                                     .text_size(TextSize::XSmall.rems())
                                                     .text_color(text_muted)
+                                                    .truncate()
                                                     .child(battery_sub),
                                             ),
                                     ),
@@ -267,6 +277,7 @@ impl Render for ControlCenter {
                                 el.child(
                                     div()
                                         .id("charge-limit-toggle")
+                                        .flex_none()
                                         .flex()
                                         .items_center()
                                         .justify_center()
@@ -301,6 +312,7 @@ impl Render for ControlCenter {
                             .child(
                                 div()
                                     .id("power-profile-cycle")
+                                    .flex_none()
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -324,10 +336,35 @@ impl Render for ControlCenter {
                     )
                     .child(
                         div()
-                            .id("power-button")
+                            .id("config-button")
+                            .flex_none()
                             .w(px(36.))
                             .h(px(36.))
-                            .rounded(px(18.))
+                            .rounded(Radius::Full.pixels())
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .border_1()
+                            .border_color(border_subtle)
+                            .bg(interactive_default)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(interactive_hover))
+                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                open_config_editor(cx);
+                            })
+                            .child(
+                                Icon::new(IconName::Sliders)
+                                    .size(IconSize::Small)
+                                    .color(Color::Default),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("power-button")
+                            .flex_none()
+                            .w(px(36.))
+                            .h(px(36.))
+                            .rounded(Radius::Full.pixels())
                             .flex()
                             .items_center()
                             .justify_center()
@@ -396,4 +433,11 @@ impl Render for ControlCenter {
                 )
             })
     }
+}
+
+/// Swap the panel for the launcher on the config editor's page.
+fn open_config_editor(cx: &mut App) {
+    let prefix = cx.config().launcher.modules.config.prefix.clone();
+    ShellWindows::close_panel(cx);
+    launcher::toggle(Some(prefix), cx);
 }

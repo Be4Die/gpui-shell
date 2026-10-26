@@ -2,9 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use super::modules::{
     apps::config::AppsConfig, calculator::config::CalculatorConfig,
-    clipboard::config::ClipboardConfig, help::config::HelpConfig, services::config::ServicesConfig,
-    shell::config::ShellConfig, theme::config::ThemesConfig, wallpaper::config::WallpaperConfig,
-    web::config::WebConfig, workspaces::config::WorkspacesConfig,
+    clipboard::config::ClipboardConfig, config::config::ConfigEditorConfig,
+    help::config::HelpConfig, mpris::config::MprisConfig, services::config::ServicesConfig,
+    shell::config::ShellConfig, sysinfo::config::SysInfoConfig, theme::config::ThemesConfig,
+    wallpaper::config::WallpaperConfig, web::config::WebConfig,
+    workspaces::config::WorkspacesConfig,
 };
 
 /// Launcher window configuration.
@@ -17,6 +19,9 @@ pub struct LauncherConfig {
     pub margin_right: f32,
     pub margin_bottom: f32,
     pub margin_left: f32,
+    /// Opacity of the launcher surface, from 0.0 to 1.0. Unset, it follows
+    /// `opacity` in `theme.toml`.
+    pub opacity: Option<f32>,
     /// Per-module settings, `[launcher.modules.<id>]`.
     #[serde(alias = "views")]
     pub modules: ModulesConfig,
@@ -31,6 +36,7 @@ impl Default for LauncherConfig {
             margin_right: 0.0,
             margin_bottom: 0.0,
             margin_left: 0.0,
+            opacity: None,
             modules: ModulesConfig::default(),
         }
     }
@@ -47,7 +53,10 @@ pub struct ModulesConfig {
     pub wallpaper: WallpaperConfig,
     pub themes: ThemesConfig,
     pub services: ServicesConfig,
+    pub sysinfo: SysInfoConfig,
+    pub mpris: MprisConfig,
     pub calculator: CalculatorConfig,
     pub clipboard: ClipboardConfig,
+    pub config: ConfigEditorConfig,
     pub help: HelpConfig,
 }

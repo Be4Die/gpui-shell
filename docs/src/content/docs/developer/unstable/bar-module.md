@@ -29,7 +29,7 @@ Each module is a directory in `crates/app/src/bar/modules/` with a
 use serde::{Deserialize, Serialize};
 
 /// `[bar.modules.uptime]`
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UptimeConfig {
     /// Text shown before the uptime in a horizontal bar.
@@ -45,9 +45,12 @@ impl Default for UptimeConfig {
 }
 ```
 
-A module is a GPUI entity. `new` sets up whatever keeps it fresh, and
-`BarWidget` renders the content in both orientations. The trait wraps it in
-the standard chip, so spacing and borders match the other modules.
+A module is a GPUI entity, not a view. `new` sets up whatever keeps it fresh,
+`BarWidget` renders the content in both orientations, and `descriptor()` is
+what the registry lists. The bar hands every render a `BarCtx`: the
+orientation, the ink to draw with, and the sizes to lay out with. Take
+colours and sizes from it, never from the theme or a literal `px()`, so the
+widget looks right in every bar style and follows the theme's radius scale.
 
 ```rust
 // crates/app/src/bar/modules/uptime/mod.rs
@@ -58,10 +61,23 @@ pub use config::UptimeConfig;
 
 use gpui::{AnyElement, Context, Window, prelude::*};
 use std::time::Duration;
-use ui::ActiveTheme;
+use ui::IconName;
 
-use super::{BarWidget, style};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, boxed, style};
 use crate::config::ActiveConfig;
+
+pub const fn descriptor() -> BarWidgetDescriptor {
+    BarWidgetDescriptor::new(
+        BarWidgetMeta {
+            name: "Uptime",          // what config.toml says
+            aliases: &[],            // older spellings that should keep working
+            label: "Uptime",         // what the config editor shows
+            description: "How long the machine has been up.",
+            icon: IconName::Timer,
+        },
+        |cx| boxed(cx, Uptime::new),
+    )
+}
 
 pub struct Uptime {
     secs: u64,
@@ -104,27 +120,43 @@ fn read_uptime() -> u64 {
 }
 
 impl BarWidget for Uptime {
-    fn render_horizontal(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_horizontal(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let prefix = &cx.config().bar.modules.uptime.prefix;
-        let text = format!("{prefix} {}", self.label());
-        style::bar_label(text, false, cx.theme().colors.text).into_any_element()
+        style::label(ctx, format!("{prefix} {}", self.label())).into_any_element()
     }
 
-    fn render_vertical(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let label = style::bar_label(self.label(), true, cx.theme().colors.text);
-        style::vertical_text_line(label)
-    }
-}
-
-impl Render for Uptime {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_bar_widget(window, cx)
+    fn render_vertical(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
+        style::text_line(ctx, style::label(ctx, self.label()))
     }
 }
 ```
 
+`style` has the shared building blocks: `stack` (a row or column for the
+orientation), `label` / `label_in`, `icon` / `icon_in`, `stat` (an icon and
+a value), `value` (a label placed the way the orientation wants) and
+`divider`. For a status colour past a threshold use `ctx.ink.status`; the
+rest of the time draw with `ctx.ink.text` and `ctx.ink.muted`.
+
 Use `cx.background_executor().timer(..)` for timers, never
 `tokio::time::sleep`. GPUI tasks don't run on tokio.
+
+### Chrome
+
+The bar wraps the content in its chip; the widget only says which kind.
+Override `shell()` to return `BarWidgetShell::Group` for a strip of items
+(workspaces, tray) or `BarWidgetShell::None` to draw nothing when there is
+nothing to show, and `is_interactive()` to get the hover style on a widget
+that opens something.
 
 ### Data from a service
 
@@ -148,19 +180,22 @@ the state yourself.
 
 ## 2. Register it
 
-Today, three files have to know about every module:
-
-1. **`bar/modules/mod.rs`**: `mod uptime;` and
-   `pub use uptime::{Uptime, UptimeConfig};`
-2. **`bar/modules/registry.rs`**: import `Uptime`, then add a
-   `Widget::Uptime(Entity<Uptime>)` variant, its arm in `render()`, and the
-   config name in `create()`:
+1. **`bar/modules/mod.rs`**: `mod uptime;`, `pub use uptime::UptimeConfig;`
+   and one line in `REGISTRY`:
 
    ```rust
-   "Uptime" => Some(Widget::Uptime(cx.new(Uptime::new))),
+   pub static REGISTRY: [BarWidgetDescriptor; 12] = [
+       // ...
+       uptime::descriptor(),
+   ];
    ```
-3. **`bar/config.rs`**: add `pub uptime: UptimeConfig` to `ModulesConfig`,
-   which makes `[bar.modules.uptime]` load.
+
+   The config parser, the layout editor and the "add widget" list all read
+   `REGISTRY`, so nothing else has to know the name.
+2. **`bar/config.rs`**: add `pub uptime: UptimeConfig` to `ModulesConfig`,
+   which makes `[bar.modules.uptime]` load. To edit it from the launcher's
+   config module, add an `Editable` impl and a `"Uptime"` arm to
+   `widget_field` in `launcher/modules/config/sections.rs`.
 
 ## 3. Try it
 
@@ -180,5 +215,5 @@ Before the PR:
   `main`. Keep the config in a file named `config.rs` so it's picked up.
 - Add a story in `crates/story` if the module has states worth looking at
   (empty, error, long text).
-- Interactive modules: override `is_interactive()` to get the hover style,
-  and open panels through `crate::panel` so only one is open at a time.
+- Interactive modules open panels through `ShellWindows::toggle_panel` so
+  only one is open at a time.

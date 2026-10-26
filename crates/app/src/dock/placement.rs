@@ -1,8 +1,9 @@
 use gpui::{App, Bounds, MouseDownEvent, Size, Window, layer_shell::Anchor, point, px};
-use ui::Spacing;
+use ui::patterns::frame::frame_hole;
 
 use crate::windows::ShellWindows;
 
+use super::config::DockGeometry;
 use super::{
     DOCK_CONTEXT_MENU_BORDER_WIDTH, DOCK_CONTEXT_MENU_GAP, DOCK_CONTEXT_MENU_ROW_HEIGHT,
     DOCK_CONTEXT_MENU_TEXT_LAYOUT_HEADROOM, DOCK_CONTEXT_MENU_VERTICAL_PADDING,
@@ -30,8 +31,10 @@ pub(super) struct DockPanelPlacement {
     pub(super) margin: (f32, f32, f32, f32),
 }
 
+/// `display_bounds` is the area the dock was laid out in; `usable_bounds`
+/// the area the menu will be, which a reserved dock is outside of.
 pub(super) fn dock_panel_placement_from_dock_click(
-    dock_position: crate::bar::config::BarPosition,
+    geometry: DockGeometry,
     dock_click: gpui::Point<gpui::Pixels>,
     dock_size: Size<gpui::Pixels>,
     menu_size: Size<gpui::Pixels>,
@@ -57,39 +60,38 @@ pub(super) fn dock_panel_placement_from_dock_click(
     let min_y = usable_top;
     let max_y = (usable_bottom - menu_height).max(min_y);
 
+    let dock_position = geometry.position;
+    let gap = geometry.gap;
     let (dock_x, dock_y) = match dock_position {
-        crate::bar::config::BarPosition::Top => (
-            (display_width - dock_width).max(0.0) / 2.0,
-            Spacing::Medium.value(),
-        ),
+        crate::bar::config::BarPosition::Top => (geometry.along(display_width, dock_width), gap),
         crate::bar::config::BarPosition::Bottom => (
-            (display_width - dock_width).max(0.0) / 2.0,
-            display_height - dock_height - Spacing::Medium.value(),
+            geometry.along(display_width, dock_width),
+            display_height - dock_height - gap,
         ),
-        crate::bar::config::BarPosition::Left => (
-            Spacing::Medium.value(),
-            (display_height - dock_height).max(0.0) / 2.0,
-        ),
+        crate::bar::config::BarPosition::Left => (gap, geometry.along(display_height, dock_height)),
         crate::bar::config::BarPosition::Right => (
-            display_width - dock_width - Spacing::Medium.value(),
-            (display_height - dock_height).max(0.0) / 2.0,
+            display_width - dock_width - gap,
+            geometry.along(display_height, dock_height),
         ),
     };
 
     let click_x: f32 = dock_x + Into::<f32>::into(dock_click.x);
     let click_y: f32 = dock_y + Into::<f32>::into(dock_click.y);
 
+    // The menu is a layer surface the compositor keeps out of every
+    // exclusive zone, the dock's own included, so its margins count from
+    // the usable area's edges, not the display's.
     if dock_position == crate::bar::config::BarPosition::Bottom {
         let origin_x = click_x - menu_width / 2.0;
-        let bottom = display_height - dock_y;
-        let max_bottom = (display_height - min_y - menu_height).max(0.0);
+        let bottom = usable_bottom - dock_y;
+        let max_bottom = (usable_bottom - usable_top - menu_height).max(0.0);
         return DockPanelPlacement {
             anchor: Anchor::BOTTOM | Anchor::LEFT,
             margin: (
                 0.0,
                 0.0,
                 clamp_dock_menu_origin(bottom, 0.0, max_bottom),
-                clamp_dock_menu_origin(origin_x, min_x, max_x),
+                clamp_dock_menu_origin(origin_x, min_x, max_x) - usable_left,
             ),
         };
     }
@@ -106,36 +108,37 @@ pub(super) fn dock_panel_placement_from_dock_click(
     DockPanelPlacement {
         anchor: Anchor::TOP | Anchor::LEFT,
         margin: (
-            clamp_dock_menu_origin(origin_y, min_y, max_y),
+            clamp_dock_menu_origin(origin_y, min_y, max_y) - usable_top,
             0.0,
             0.0,
-            clamp_dock_menu_origin(origin_x, min_x, max_x),
+            clamp_dock_menu_origin(origin_x, min_x, max_x) - usable_left,
         ),
     }
 }
 
 pub(super) fn dock_panel_placement_from_event(
-    dock_position: crate::bar::config::BarPosition,
+    geometry: DockGeometry,
     event: &MouseDownEvent,
     window: &Window,
     cx: &App,
     dock_size: Size<gpui::Pixels>,
     menu_size: Size<gpui::Pixels>,
 ) -> DockPanelPlacement {
-    let (display_bounds, usable_bounds) = ShellWindows::display(cx, window)
-        .map(|display| (display.bounds(), display.visible_bounds()))
-        .unwrap_or_else(|| {
-            let bounds = Bounds::new(point(px(0.0), px(0.0)), window.viewport_size());
-            (bounds, bounds)
-        });
+    let display = ShellWindows::display(cx, window)
+        .map(|display| display.bounds())
+        .unwrap_or_else(|| Bounds::new(point(px(0.0), px(0.0)), window.viewport_size()));
+    // The dock is laid out inside the bar's and the frame's zones; the menu
+    // inside the dock's own as well, when it reserves its space.
+    let around_dock = frame_hole(display, ShellWindows::reserved_edges(cx, false));
+    let usable = frame_hole(display, ShellWindows::reserved_edges(cx, true));
 
     dock_panel_placement_from_dock_click(
-        dock_position,
+        geometry,
         event.position,
         dock_size,
         menu_size,
-        display_bounds,
-        usable_bounds,
+        around_dock,
+        usable,
     )
 }
 

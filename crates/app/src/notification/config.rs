@@ -16,6 +16,24 @@ pub enum NotificationPopupPosition {
     BottomRight,
 }
 
+impl NotificationPopupPosition {
+    pub const ALL: [Self; 4] = [
+        Self::TopLeft,
+        Self::TopRight,
+        Self::BottomLeft,
+        Self::BottomRight,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::TopLeft => "Top left",
+            Self::TopRight => "Top right",
+            Self::BottomLeft => "Bottom left",
+            Self::BottomRight => "Bottom right",
+        }
+    }
+}
+
 /// Notification module configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -35,6 +53,10 @@ pub struct NotificationConfig {
     pub popup_stack_limit: usize,
     pub popup_card_collapsed_height: f32,
     pub popup_card_expanded_height: f32,
+    /// Opacity of popup cards, from 0.0 to 1.0. Unset, it follows `opacity`
+    /// in `theme.toml`. The notification center is a panel and follows
+    /// `[panels] opacity`.
+    pub opacity: Option<f32>,
     pub icons: NotificationIcons,
 }
 
@@ -53,6 +75,7 @@ impl Default for NotificationConfig {
             popup_stack_limit: 16,
             popup_card_collapsed_height: 92.0,
             popup_card_expanded_height: 170.0,
+            opacity: None,
             icons: NotificationIcons::default(),
         }
     }

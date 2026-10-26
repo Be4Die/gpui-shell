@@ -3,6 +3,7 @@
 mod persistence;
 mod signals;
 mod state;
+pub mod store;
 mod theme;
 
 use std::collections::BTreeMap;
@@ -18,12 +19,14 @@ pub use state::State;
 
 use crate::state::AppState;
 
-pub use crate::bar::config::{BarConfig, BarPosition, ModulesConfig};
+pub use crate::bar::config::{BarConfig, BarPosition, BarStyle, ModulesConfig};
 pub use crate::control_center::ControlCenterConfig;
 pub use crate::dock::DockConfig;
+pub use crate::frame::FrameConfig;
 pub use crate::launcher::config::LauncherConfig;
 pub use crate::notification::{NotificationConfig, NotificationPopupPosition};
 pub use crate::osd::{OsdConfig, OsdPosition};
+pub use crate::windows::PanelsConfig;
 
 /// Root application configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +38,8 @@ pub struct Config {
     pub notification: NotificationConfig,
     pub control_center: ControlCenterConfig,
     pub dock: DockConfig,
+    pub frame: FrameConfig,
+    pub panels: PanelsConfig,
     /// Startup mode per service, keyed by the lowercased service name
     /// (`audio`, `tray`, ...). Services absent from the map start eagerly.
     /// Setting a mode from `;s` writes `state.toml`, which then overrides
@@ -55,6 +60,8 @@ impl Default for Config {
             notification: NotificationConfig::default(),
             control_center: ControlCenterConfig::default(),
             dock: DockConfig::default(),
+            frame: FrameConfig::default(),
+            panels: PanelsConfig::default(),
             services: BTreeMap::new(),
             watch_config: true,
             watch_theme: true,
@@ -68,10 +75,11 @@ impl Config {
     /// Initialize the global config.
     ///
     /// A file we can't parse costs the session its settings, but never the
-    /// file itself: the app only ever writes `state.toml` (see
-    /// [`State`]), and both watchers keep the last good value until the
-    /// next save fixes the file. `gpuishell --validate` reports where the
-    /// parse gave up.
+    /// file itself: the shell persists its own values to `state.toml` (see
+    /// [`State`]), the config editor edits `config.toml` one key at a time
+    /// through `toml_edit` (see [`store`]) and refuses a file that does not
+    /// parse, and both watchers keep the last good value until the next save
+    /// fixes the file. `gpuishell --validate` reports where the parse gave up.
     pub fn init(cx: &mut App) {
         let config = match persistence::load_or_create() {
             Ok(config) => config,
@@ -89,7 +97,7 @@ impl Config {
             }
         };
 
-        cx.set_global(theme);
+        Theme::set(theme, cx);
         cx.set_global(config);
         State::init(cx);
         ConfigSignals::init(cx);
@@ -161,6 +169,11 @@ impl Config {
 
             cx.spawn(async move |cx| {
                 while rx.recv().await.is_some() {
+                    // A reload would throw away edits the user has not saved
+                    // or discarded yet.
+                    if store::has_pending() {
+                        continue;
+                    }
                     cx.update(|cx| {
                         tracing::info!("Config file changed, reloading");
                         Config::reload(cx);
@@ -261,7 +274,7 @@ fn notify_parse_failure(slot: LocalSlot, file: &str, err: &anyhow::Error, cx: &A
 /// Flatten a parse diagnostic into one line. The caret block toml draws is
 /// noise in a notification card, and the reason - `unknown variant ...` - is
 /// the line underneath it.
-fn one_line(err: &anyhow::Error) -> String {
+pub(super) fn one_line(err: &anyhow::Error) -> String {
     format!("{err:#}")
         .lines()
         .map(str::trim)

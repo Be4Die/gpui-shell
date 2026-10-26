@@ -2,7 +2,7 @@
 
 use std::f32::consts::PI;
 
-use crate::theme::ActiveTheme;
+use crate::theme::{ActiveTheme, Fade, Opacity, Radius};
 use gpui::{
     App, Hsla, IntoElement, PathBuilder, PathStyle, Pixels, RenderOnce, StrokeOptions, Styled,
     Window, canvas, div, point, prelude::*, px, relative,
@@ -71,10 +71,10 @@ impl RenderOnce for ProgressBar {
             .w_full()
             .h(px(8.0))
             .p(px(2.0))
-            .rounded_full()
+            .rounded(Radius::Full.pixels())
             .bg(bg)
             .shadow(vec![gpui::BoxShadow {
-                color: gpui::black().opacity(0.08),
+                color: gpui::black().fade(Opacity::Shadow),
                 offset: point(px(0.), px(1.)),
                 blur_radius: px(0.),
                 spread_radius: px(0.),
@@ -83,7 +83,7 @@ impl RenderOnce for ProgressBar {
             .child(
                 div()
                     .h_full()
-                    .rounded_full()
+                    .rounded(Radius::Full.pixels())
                     .when(self.value > self.max_value, |this| this.bg(over))
                     .when(self.value <= self.max_value, |this| this.bg(fg))
                     .w(relative(fill_width)),

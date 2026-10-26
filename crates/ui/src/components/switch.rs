@@ -3,7 +3,7 @@
 use std::rc::Rc;
 use std::time::Duration;
 
-use crate::theme::{ActiveTheme, Color, Spacing};
+use crate::theme::{ActiveTheme, Color, Radius, Spacing};
 use gpui::{
     Animation, AnimationExt as _, App, ElementId, IntoElement, Pixels, RenderOnce, SharedString,
     Window, div, prelude::*, px,
@@ -134,7 +134,7 @@ impl RenderOnce for Switch {
         let knob = div()
             .absolute()
             .size(thumb_size)
-            .rounded_full()
+            .rounded(Radius::Full.pixels())
             .bg(thumb_bg)
             .shadow_md();
 
@@ -175,7 +175,7 @@ impl RenderOnce for Switch {
             .id((self.id.clone(), "switch-track"))
             .w(track_width)
             .h(track_height)
-            .rounded_full()
+            .rounded(Radius::Full.pixels())
             .bg(track_bg)
             .border(inset)
             .border_color(track_border)

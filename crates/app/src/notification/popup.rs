@@ -4,16 +4,17 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use futures_signals::signal::SignalExt;
 use futures_util::StreamExt;
 use gpui::{
     AnyElement, AnyWindowHandle, App, Bounds, Context, DisplayId, Entity, MouseButton, Point,
     Render, Size, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div,
-    layer_shell::*, point, prelude::*, px, size,
+    layer_shell::*, point, prelude::*, px, relative, size,
 };
 use services::{Notification, NotificationCommand, NotificationSubscriber};
-use ui::patterns::PanelSurface;
-use ui::{ActiveTheme, Color, Icon, IconSize, Radius, Spacing};
+use ui::patterns::{PanelSurface, surface_radius};
+use ui::{ActiveTheme, Spacing};
 
 use crate::config::ActiveConfig;
 use crate::state::AppState;
@@ -26,6 +27,7 @@ const PEEK_COUNT: usize = 2;
 const PEEK_HEIGHT: f32 = 6.0;
 /// Per side, per level of depth.
 const PEEK_INSET: f32 = 10.0;
+const EXPIRY_LINE_HEIGHT: f32 = 2.0;
 
 pub(crate) struct PopupWindowState {
     handle: AnyWindowHandle,
@@ -36,6 +38,8 @@ struct NotificationPopupStack {
     subscriber: NotificationSubscriber,
     notifications: Vec<Arc<Notification>>,
     hovered: bool,
+    /// Where the countdowns stand still while the popups are held.
+    held_since_ms: Option<i64>,
     fit: WindowFit,
     /// Window size the input region was last set for.
     input_region_for: Option<Size<gpui::Pixels>>,
@@ -47,6 +51,7 @@ impl NotificationPopupStack {
             subscriber,
             notifications,
             hovered: false,
+            held_since_ms: None,
             fit: WindowFit::default(),
             input_region_for: None,
         }
@@ -68,20 +73,20 @@ impl NotificationPopupStack {
         notification: &Notification,
         compact: bool,
         config: &NotificationConfig,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
-        let dismiss_subscriber = self.subscriber.clone();
-        let id = notification.id;
         let clicked = notification.clone();
 
         div()
-            .relative()
+            .id(("notification-card", notification.id))
             .w_full()
-            .overflow_hidden()
-            .panel_surface(cx)
+            .panel_surface_with(config.opacity, cx)
             .p(Spacing::Medium.pixels())
-            .when(!compact, |el| el.border_color(theme.colors.accent))
+            .flex()
+            .flex_col()
+            .gap(Spacing::Small.pixels())
             .when(is_critical(notification), |el| {
                 el.border_color(theme.colors.status.error)
             })
@@ -93,49 +98,62 @@ impl NotificationPopupStack {
             })
             .child(notification_card_body(
                 notification,
+                window,
                 cx,
-                false,
                 compact,
                 &self.subscriber,
             ))
+            .when_some(
+                expiry_fraction(notification, self.held_since_ms),
+                |el, fraction| el.child(self.render_expiry(fraction, cx)),
+            )
+            .into_any_element()
+    }
+
+    /// The time left before the card goes, as a line that shrinks.
+    fn render_expiry(&self, fraction: f32, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        div()
+            .w_full()
+            .h(px(EXPIRY_LINE_HEIGHT))
+            .rounded_full()
+            .bg(theme.colors.border_variant)
             .child(
                 div()
-                    .absolute()
-                    .top(px(8.0))
-                    .right(px(8.0))
-                    .cursor_pointer()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |_, _, _, cx| {
-                            cx.stop_propagation();
-                            dismiss_subscriber.dispatch(NotificationCommand::Dismiss(id));
-                        }),
-                    )
-                    .child(
-                        Icon::new(config.icons.close())
-                            .size(IconSize::XSmall)
-                            .color(Color::Muted),
-                    ),
+                    .h_full()
+                    .w(relative(fraction))
+                    .rounded_full()
+                    .bg(theme.colors.accent),
             )
             .into_any_element()
     }
 
     /// A peeking edge of a notification under the top card.
-    fn render_peek(&self, depth: usize, cx: &Context<Self>) -> AnyElement {
+    fn render_peek(
+        &self,
+        depth: usize,
+        config: &NotificationConfig,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let theme = cx.theme();
         let inset = PEEK_INSET * (depth + 1) as f32;
         div()
             .h(px(PEEK_HEIGHT))
             .mx(px(inset))
-            .bg(theme.colors.surface_background)
+            .bg(theme.surface(config.opacity))
             .border_1()
             .border_t_0()
             .border_color(theme.colors.border)
-            .rounded_b(Radius::Large.pixels())
+            .rounded_b(surface_radius())
             .into_any_element()
     }
 
-    fn build_stack(&self, config: &NotificationConfig, cx: &mut Context<Self>) -> AnyElement {
+    fn build_stack(
+        &self,
+        config: &NotificationConfig,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let fanned = self.hovered;
         let shown = if fanned {
             self.notifications.len()
@@ -149,7 +167,7 @@ impl NotificationPopupStack {
         };
         let cards: Vec<AnyElement> = self.notifications[..shown]
             .iter()
-            .map(|notification| self.render_card(notification, !fanned, config, cx))
+            .map(|notification| self.render_card(notification, !fanned, config, window, cx))
             .collect();
 
         div()
@@ -159,8 +177,13 @@ impl NotificationPopupStack {
             .p(Spacing::Medium.pixels())
             .flex()
             .flex_col()
-            .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
-                this.set_hovered(*hovered, cx);
+            // gpui reports a hover at the window origin on first paint, before any
+            // pointer entered; only a real pointer counts, and a move fills in the enter.
+            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                this.set_hovered(*hovered && window.is_window_hovered(), cx);
+            }))
+            .on_mouse_move(cx.listener(|this, _event, _window, cx| {
+                this.set_hovered(true, cx);
             }))
             .child(
                 // Taller than the screen: scroll rather than cut the last card.
@@ -173,7 +196,7 @@ impl NotificationPopupStack {
                     .gap(Spacing::XSmall.pixels())
                     .children(cards),
             )
-            .children((0..peeks).map(|depth| self.render_peek(depth, cx)))
+            .children((0..peeks).map(|depth| self.render_peek(depth, config, cx)))
             .into_any_element()
     }
 }
@@ -183,8 +206,19 @@ impl Render for NotificationPopupStack {
         window.set_rem_size(cx.theme().font_size);
         let config = cx.config().notification.clone();
         let margin = popup_margin(&config);
+        self.held_since_ms = self.subscriber.popups_held_since_ms();
 
-        let measure = self.build_stack(&config, cx);
+        // The expiry lines move every frame while something counts down.
+        let counting = self.held_since_ms.is_none()
+            && self
+                .notifications
+                .iter()
+                .any(|notification| notification.expires_at_ms.is_some());
+        if counting {
+            window.request_animation_frame();
+        }
+
+        let measure = self.build_stack(&config, window, cx);
         // Fanned out, every card shows in full, bounded only by the screen.
         let max_height = if self.hovered {
             px(f32::INFINITY)
@@ -219,8 +253,19 @@ impl Render for NotificationPopupStack {
         div()
             .id("notification-popup-window")
             .size_full()
-            .when(paint, |el| el.child(self.build_stack(&config, cx)))
+            .when(paint, |el| el.child(self.build_stack(&config, window, cx)))
     }
+}
+
+/// How much of the popup's time is left, frozen while the popups are held.
+fn expiry_fraction(notification: &Notification, held_since_ms: Option<i64>) -> Option<f32> {
+    let expires_at = notification.expires_at_ms?;
+    if notification.timeout_ms <= 0 {
+        return None;
+    }
+    let now = held_since_ms.unwrap_or_else(|| Utc::now().timestamp_millis());
+    let remaining = (expires_at - now).max(0) as f32;
+    Some((remaining / notification.timeout_ms as f32).clamp(0.0, 1.0))
 }
 
 fn popup_window_options(

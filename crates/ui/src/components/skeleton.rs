@@ -80,7 +80,7 @@ impl RenderOnce for Skeleton {
 
         let shaped = match self.shape {
             SkeletonShape::Rectangle => base.rounded(Radius::Small.pixels()),
-            SkeletonShape::Circle => base.rounded_full(),
+            SkeletonShape::Circle => base.rounded(Radius::Full.pixels()),
         };
 
         // Pulse animation: oscillate opacity between 0.4 and 1.0.
