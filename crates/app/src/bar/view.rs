@@ -9,36 +9,63 @@ use gpui::{
     WindowBounds, WindowKind, WindowOptions, layer_shell::*, point, prelude::*, px,
 };
 use ui::ActiveTheme;
-use ui::patterns::BarSurface;
+use ui::patterns::{BarSegment, BarShape, BarSurface};
 
-use super::config::BarPosition;
-use super::modules::Widget;
+use super::config::{BarItem, BarPosition, BarStyle};
+use super::modules::{self, BarCtx, Widget};
 use crate::config::{ActiveConfig, ConfigSignals};
 use crate::state::watch;
 
-/// One of the bar's three widget lists, kept with the names it was built from.
+/// One of the bar's three widget lists, kept with the entries it was built from.
 struct Section {
-    names: Vec<String>,
-    widgets: Vec<Widget>,
+    items: Vec<BarItem>,
+    /// One list per entry: what shares a bubble.
+    groups: Vec<Vec<Widget>>,
 }
 
 impl Section {
-    fn new(names: &[String], cx: &mut Context<Bar>) -> Self {
+    fn new(items: &[BarItem], ctx: &BarCtx, cx: &mut Context<Bar>) -> Self {
         Self {
-            names: names.to_vec(),
-            widgets: Widget::create_many(names, cx),
+            items: items.to_vec(),
+            groups: items
+                .iter()
+                .map(|item| modules::build_many(item.names(), ctx, cx))
+                .filter(|group| !group.is_empty())
+                .collect(),
         }
     }
 
     /// Rebuild only when the list changed, so untouched widgets keep their state.
-    fn sync(&mut self, names: &[String], cx: &mut Context<Bar>) {
-        if self.names != names {
-            *self = Self::new(names, cx);
+    fn sync(&mut self, items: &[BarItem], ctx: &BarCtx, cx: &mut Context<Bar>) {
+        if self.items != items {
+            *self = Self::new(items, ctx, cx);
         }
     }
 
-    fn render(&self) -> Vec<AnyElement> {
-        self.widgets.iter().map(Widget::render).collect()
+    /// Hand every widget its current placement.
+    fn place(&self, ctx: &BarCtx, cx: &mut Context<Bar>) {
+        for widget in self.groups.iter().flatten() {
+            widget.set_ctx(ctx, cx);
+        }
+    }
+
+    /// One segment per entry, in every style; the style only decides what
+    /// the segment paints.
+    fn render(&self, ctx: &BarCtx) -> Vec<AnyElement> {
+        let segment = ctx.segment;
+        self.groups
+            .iter()
+            .map(|group| {
+                BarSegment::new(ctx.vertical)
+                    .fill(segment.fill)
+                    .border(segment.border)
+                    .radius(segment.radius)
+                    .thickness(Some(segment.thickness))
+                    .padding(segment.padding)
+                    .children(group.iter().map(Widget::render))
+                    .into_any_element()
+            })
+            .collect()
     }
 }
 
@@ -54,19 +81,21 @@ impl Bar {
     /// Create a bar with configuration.
     fn new(cx: &mut Context<Self>) -> Self {
         let config = cx.config().bar.clone();
+        let ctx = BarCtx::new(&config, cx.theme());
         let bar = ConfigSignals::global(cx).bar.signal_cloned();
         watch(cx, bar, |this, bar, cx| {
-            this.start.sync(&bar.start, cx);
-            this.center.sync(&bar.center, cx);
-            this.end.sync(&bar.end, cx);
+            let ctx = BarCtx::new(&bar, cx.theme());
+            this.start.sync(&bar.start, &ctx, cx);
+            this.center.sync(&bar.center, &ctx, cx);
+            this.end.sync(&bar.end, &ctx, cx);
             cx.notify();
         });
 
         Self {
             position: config.position,
-            start: Section::new(&config.start, cx),
-            center: Section::new(&config.center, cx),
-            end: Section::new(&config.end, cx),
+            start: Section::new(&config.start, &ctx, cx),
+            center: Section::new(&config.center, &ctx, cx),
+            end: Section::new(&config.end, &ctx, cx),
         }
     }
 }
@@ -74,14 +103,44 @@ impl Bar {
 impl Render for Bar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(cx.theme().font_size);
+
+        // Config and theme changes both land here, so this is where every
+        // widget learns about its new placement.
+        let ctx = BarCtx::new(&cx.config().bar, cx.theme());
+        for section in [&self.start, &self.center, &self.end] {
+            section.place(&ctx, cx);
+        }
+
         let bar = &cx.config().bar;
+        // A side of the screen frame draws no hairline of its own: the frame
+        // outlines the whole work area.
+        let framed = cx.config().screen_frame().is_some() && cx.config().bar_is_frame_side();
+        let shape = match bar.style {
+            BarStyle::Attached | BarStyle::Frame if framed => BarShape::Framed,
+            BarStyle::Attached | BarStyle::Bubbles | BarStyle::Frame => BarShape::Attached,
+            BarStyle::Floating => BarShape::Floating {
+                radius: bar.floating.radius(),
+            },
+        };
+
+        // With bubbles the fill and border move onto the segments.
+        let bubbles = bar.style == BarStyle::Bubbles;
+        let fill = if bubbles {
+            gpui::transparent_black()
+        } else {
+            bar.background_color(cx.theme())
+        };
 
         BarSurface::new(self.position.edge())
-            .border(bar.show_border)
-            .padding(px(bar.padding))
-            .start(self.start.render())
-            .center(self.center.render())
-            .end(self.end.render())
+            .shape(shape)
+            .background(fill)
+            .border(bar.show_border && !bubbles)
+            .padding(ctx.end_padding)
+            .inset(ctx.segment.inset)
+            .segment_gap(ctx.segment.gap)
+            .start(self.start.render(&ctx))
+            .center(self.center.render(&ctx))
+            .end(self.end.render(&ctx))
     }
 }
 
@@ -102,30 +161,29 @@ pub fn window_options(
     // between the anchors would be the protocol-blessed alternative, but
     // gpui sets a `wp_viewport` destination from these bounds before the
     // configure arrives, and a zero there is a protocol error.
-    let display_size = crate::state::logical_display_size(display_id, cx)
-        .or_else(|| {
-            display_id
-                .and_then(|id| cx.find_display(id))
-                .or_else(|| cx.primary_display())
-                .map(|display| display.bounds().size)
-        })
-        .unwrap_or_else(|| Size::new(px(1920.), px(1080.)));
+    let display_size = crate::state::display_extent(display_id, cx);
     let config = cx.config();
+    // A floating bar keeps `gap` from every edge, so it is that much shorter at both ends.
+    let gap = match config.bar.style {
+        BarStyle::Floating => config.bar.floating.gap.max(0.),
+        BarStyle::Attached | BarStyle::Frame | BarStyle::Bubbles => 0.,
+    };
+    let length = |extent: gpui::Pixels| (extent - px(gap * 2.)).max(px(1.));
     let (window_size, anchor) = match config.bar.position {
         BarPosition::Left => (
-            Size::new(px(config.bar.size), display_size.height),
+            Size::new(px(config.bar.size), length(display_size.height)),
             Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM,
         ),
         BarPosition::Right => (
-            Size::new(px(config.bar.size), display_size.height),
+            Size::new(px(config.bar.size), length(display_size.height)),
             Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM,
         ),
         BarPosition::Top => (
-            Size::new(display_size.width, px(config.bar.size)),
+            Size::new(length(display_size.width), px(config.bar.size)),
             Anchor::LEFT | Anchor::RIGHT | Anchor::TOP,
         ),
         BarPosition::Bottom => (
-            Size::new(display_size.width, px(config.bar.size)),
+            Size::new(length(display_size.width), px(config.bar.size)),
             Anchor::LEFT | Anchor::RIGHT | Anchor::BOTTOM,
         ),
     };
@@ -143,8 +201,9 @@ pub fn window_options(
             namespace: "bar".to_string(),
             layer: Layer::Top,
             anchor,
+            // Compositors add the margin on the anchored edge to this zone.
             exclusive_zone: Some(px(config.bar.size)),
-            margin: None,
+            margin: (gap > 0.).then(|| (px(gap), px(gap), px(gap), px(gap))),
             keyboard_interactivity: KeyboardInteractivity::None,
             ..Default::default()
         }),
@@ -154,11 +213,14 @@ pub fn window_options(
 
 /// Initialize the bar using the current global config.
 pub fn init(cx: &mut App) {
-    // Only the anchor and exclusive zone need new windows; `Bar` applies the
-    // rest in place.
+    // Only the anchor, exclusive zone and margins need new windows; `Bar`
+    // applies the rest in place.
     let layout = ConfigSignals::global(cx)
         .bar
-        .signal_ref(|bar| (bar.position, bar.size))
+        .signal_ref(|bar| {
+            let gap = (bar.style == BarStyle::Floating).then_some(bar.floating.gap);
+            (bar.position, bar.size, gap)
+        })
         .dedupe()
         .to_stream();
 
@@ -170,7 +232,13 @@ pub fn init(cx: &mut App) {
 
         tracing::info!("Bar opened");
 
-        cx.update(open_all_bar_windows);
+        // Frame strips first, so a floating bar sits inside the frame; the
+        // dock last, so it sits beside the bar. See `reload`.
+        cx.update(|cx| {
+            crate::frame::reopen(cx);
+            open_all_bar_windows(cx);
+            crate::dock::reload(cx);
+        });
 
         let mut layout = layout.skip(1);
         while layout.next().await.is_some() {
@@ -216,6 +284,10 @@ fn open_all_bar_windows(cx: &mut App) -> usize {
 }
 
 /// Rebuild all bar windows using the latest config.
+/// Reopen the shell's edge windows in layout order. Compositors hand out
+/// exclusive zones in creation order (niri) or by layer (Hyprland), so the
+/// frame's strips go first, then the bar, then the dock: each is laid out
+/// inside what came before it.
 pub fn reload(cx: &mut App) {
     let old_windows: Vec<_> = cx
         .windows()
@@ -223,6 +295,7 @@ pub fn reload(cx: &mut App) {
         .filter(|h| h.downcast::<Bar>().is_some())
         .collect();
 
+    crate::frame::reopen(cx);
     let opened = open_all_bar_windows(cx);
     if opened == 0 {
         tracing::warn!("Bar reload skipped closing old windows because no new bar window opened");
@@ -232,4 +305,5 @@ pub fn reload(cx: &mut App) {
     for handle in old_windows {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
     }
+    crate::dock::reload(cx);
 }

@@ -75,3 +75,20 @@ pub(super) fn write_toml<T: Serialize>(path: &Path, value: &T) -> anyhow::Result
         .with_context(|| format!("Failed to write file: {}", path.display()))?;
     Ok(())
 }
+
+/// Write `text` to `path` through a sibling temp file and a rename, so the
+/// file is never absent: [`load`] treats a missing file as an error and the
+/// watcher's reload would otherwise race the write.
+pub(super) fn write_atomic(path: &Path, text: &str) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("Invalid path has no parent directory: {}", path.display()))?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+
+    let tmp = path.with_extension("toml.tmp");
+    fs::write(&tmp, text).with_context(|| format!("Failed to write file: {}", tmp.display()))?;
+    fs::rename(&tmp, path)
+        .with_context(|| format!("Failed to move {} over {}", tmp.display(), path.display()))?;
+    Ok(())
+}

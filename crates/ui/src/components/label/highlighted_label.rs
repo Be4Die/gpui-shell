@@ -3,7 +3,7 @@
 
 use std::ops::Range;
 
-use crate::theme::{ActiveTheme, Color};
+use crate::theme::{ActiveTheme, Color, Fade, Opacity};
 use gpui::{
     App, FontWeight, HighlightStyle, IntoElement, ParentElement, RenderOnce, SharedString,
     StyledText, UnderlineStyle, Window, px,
@@ -142,7 +142,7 @@ impl RenderOnce for HighlightedLabel {
                 font_weight: Some(FontWeight::BOLD),
                 underline: Some(UnderlineStyle {
                     thickness: px(1.0),
-                    color: Some(highlight_color.opacity(0.4)),
+                    color: Some(highlight_color.fade(Opacity::Muted)),
                     wavy: false,
                 }),
                 ..Default::default()

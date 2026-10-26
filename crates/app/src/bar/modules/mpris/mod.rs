@@ -5,12 +5,9 @@ pub use config::MprisConfig;
 
 use gpui::{AnyElement, App, ClickEvent, Context, Pixels, Point, Window, prelude::*, px};
 use services::{MprisData, PlaybackStatus};
-use ui::{
-    ActiveTheme, ButtonCommon, ButtonLike, ButtonStyle, Clickable, Color, Icon, IconName,
-    LabelCommon,
-};
+use ui::{ButtonCommon, ButtonLike, ButtonStyle, Clickable, IconName, LabelCommon};
 
-use super::{BarWidget, style};
+use super::{BarCtx, BarWidget, BarWidgetDescriptor, BarWidgetMeta, boxed, style};
 use crate::config::{ActiveConfig, Config};
 use crate::state::AppState;
 use crate::state::watch;
@@ -18,6 +15,20 @@ use crate::windows::{PanelConfig, PanelSize, ShellWindows, panel_placement_from_
 
 mod panel;
 pub use panel::MprisPanel;
+pub(crate) use panel::tick_while_playing;
+
+pub const fn descriptor() -> BarWidgetDescriptor {
+    BarWidgetDescriptor::new(
+        BarWidgetMeta {
+            name: "Mpris",
+            aliases: &["Media", "Player"],
+            label: "Media",
+            description: "Now-playing controls for media players.",
+            icon: IconName::Music,
+        },
+        |cx| boxed(cx, Mpris::new),
+    )
+}
 
 /// Bar widget for media status and controls.
 pub struct Mpris {
@@ -76,35 +87,36 @@ impl Mpris {
         }
     }
 
-    fn label(&self) -> String {
+    /// The track as `(title, artist)`: the title in full ink, the artist
+    /// muted after it. A player with no metadata shows its name alone.
+    fn label(&self) -> (String, Option<String>) {
         let Some(player) = self.primary_player() else {
-            return "No media".to_string();
+            return ("No media".to_string(), None);
         };
 
         if let Some(metadata) = &player.metadata {
-            let value = metadata.to_string();
-            if !value.is_empty() {
-                return value;
+            let artist = metadata
+                .artists
+                .as_ref()
+                .map(|artists| artists.join(", "))
+                .filter(|artist| !artist.is_empty());
+            match (&metadata.title, artist) {
+                (Some(title), artist) if !title.is_empty() => return (title.clone(), artist),
+                (_, Some(artist)) => return (artist, None),
+                _ => {}
             }
         }
 
-        player
-            .service
-            .rsplit('.')
-            .next()
-            .unwrap_or("Player")
-            .to_string()
+        (player.name(), None)
     }
 
-    fn render_widget_content(
-        &self,
-        theme: &ui::Theme,
-        icon: IconName,
-        label: Option<String>,
-        is_vertical: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// A vertical bar has no room for a title, so it shows the state alone.
+    fn render(&self, ctx: &BarCtx, cx: &mut Context<Self>) -> AnyElement {
         let max_width = cx.config().bar.modules.mpris.max_width;
+        // Roughly how many characters the configured width holds, so the cut
+        // lands on a word; `truncate` still guards the pixels.
+        let chars = (max_width / f32::from(ctx.rhythm.icon()) * 2.) as usize;
+        let label = (!ctx.vertical).then(|| self.label());
 
         ButtonLike::new("mpris-widget")
             .style(ButtonStyle::Transparent)
@@ -112,18 +124,31 @@ impl Mpris {
                 this.toggle_panel(event.position(), window, cx);
             }))
             .child(
-                style::stack(is_vertical)
+                style::stack(ctx)
                     .justify_center()
-                    .gap(px(style::CHIP_GAP))
+                    .gap(ctx.metrics.gap)
                     .max_w(px(max_width))
                     .overflow_hidden()
-                    .child(
-                        Icon::new(icon)
-                            .size(style::icon(is_vertical))
-                            .color(Color::Default),
-                    )
-                    .when_some(label, |el, label| {
-                        el.child(style::bar_label(label, is_vertical, theme.colors.text).truncate())
+                    .child(style::icon(ctx, self.icon()))
+                    .when_some(label, |el, (title, artist)| {
+                        let title_chars = if artist.is_some() {
+                            chars * 2 / 3
+                        } else {
+                            chars
+                        };
+                        el.child(
+                            style::label(ctx, style::fit_words(&title, title_chars)).truncate(),
+                        )
+                        .when_some(artist, |el, artist| {
+                            el.child(
+                                style::label_in(
+                                    ctx,
+                                    style::fit_words(&artist, chars - title_chars),
+                                    ctx.ink.muted,
+                                )
+                                .truncate(),
+                            )
+                        })
                     }),
             )
             .into_any_element()
@@ -135,19 +160,21 @@ impl BarWidget for Mpris {
         true
     }
 
-    fn render_vertical(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        self.render_widget_content(&theme, self.icon(), None, true, cx)
+    fn render_vertical(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render(ctx, cx)
     }
 
-    fn render_horizontal(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        self.render_widget_content(&theme, self.icon(), Some(self.label()), false, cx)
-    }
-}
-
-impl Render for Mpris {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_bar_widget(window, cx)
+    fn render_horizontal(
+        &mut self,
+        ctx: &BarCtx,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render(ctx, cx)
     }
 }

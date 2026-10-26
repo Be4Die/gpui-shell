@@ -1,6 +1,6 @@
 //! [`LabelLike`] - the shared chrome behind every label.
 
-use crate::theme::{ActiveTheme, Color, TextSize};
+use crate::theme::{ActiveTheme, Color, Fade, Opacity, TextSize};
 use gpui::{
     AnyElement, App, Div, FontWeight, IntoElement, ParentElement, Rems, RenderOnce, UnderlineStyle,
     Window, div, prelude::*, px, relative,
@@ -175,7 +175,7 @@ impl RenderOnce for LabelLike {
             // alpha channel outright.
             color.fade_out(1.0 - alpha.clamp(0.0, 1.0));
         }
-        let underline_color = colors.text_muted.opacity(0.4);
+        let underline_color = colors.text_muted.fade(Opacity::Muted);
 
         self.base
             .map(|this| this.text_size(self.custom_size.unwrap_or_else(|| self.size.rems())))

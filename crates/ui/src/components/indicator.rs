@@ -1,6 +1,6 @@
 //! Indicator - small status marker (dot, bar, or icon).
 
-use crate::theme::{ActiveTheme, Color};
+use crate::theme::{ActiveTheme, Color, Radius};
 use gpui::{App, IntoElement, RenderOnce, Window, div, prelude::*, px};
 
 use crate::components::icon::{Icon, IconSize};
@@ -71,13 +71,13 @@ impl RenderOnce for Indicator {
         match self.kind {
             IndicatorKind::Dot => container
                 .size(px(6.0))
-                .rounded_full()
+                .rounded(Radius::Full.pixels())
                 .bg(fg)
                 .into_any_element(),
             IndicatorKind::Bar => container
                 .h(px(6.0))
                 .w_full()
-                .rounded(px(2.0))
+                .rounded(Radius::XSmall.pixels())
                 .bg(fg)
                 .into_any_element(),
             IndicatorKind::Icon(icon) => container

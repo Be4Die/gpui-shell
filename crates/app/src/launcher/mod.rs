@@ -22,7 +22,8 @@ use gpui::{
 use ui::patterns::{LauncherFrame, footer_hints};
 use ui::{
     ActiveTheme, Color, Icon, IconSize, InputBuffer, Label, LabelCommon, Radius, ScrollStrategy,
-    Spacing, TextSize, ThumbnailCache, VirtualList, VirtualListScrollHandle, render_input_line,
+    Scrollbar, Spacing, TextSize, ThumbnailCache, VirtualList, VirtualListScrollHandle,
+    render_input_line,
 };
 
 use self::action::{Action, ActionPanel, Outcome};
@@ -95,7 +96,7 @@ impl Body {
     }
 
     fn dropdown(&self) -> Option<&Dropdown> {
-        self.collection()?.dropdown.as_ref()
+        self.collection()?.dropdown.as_deref()
     }
 }
 
@@ -131,6 +132,8 @@ pub struct Launcher {
     focus_handle: FocusHandle,
     /// Scroll state for detail and custom bodies.
     body_scroll: ScrollHandle,
+    /// Scroll state for the detail pane beside a list.
+    detail_scroll: ScrollHandle,
     list: VirtualListScrollHandle,
     registry: Vec<ModuleDescriptor>,
     metas: Vec<ModuleMeta>,
@@ -171,6 +174,7 @@ impl Launcher {
             input,
             focus_handle: cx.focus_handle(),
             body_scroll: ScrollHandle::new(),
+            detail_scroll: ScrollHandle::new(),
             list: VirtualListScrollHandle::new(),
             modules: registry.iter().map(|_| None).collect(),
             registry,
@@ -420,7 +424,8 @@ impl Launcher {
         match outcome {
             Outcome::Close => close(window, cx),
             Outcome::Stay => cx.notify(),
-            Outcome::Push(page) => self.push(page, cx),
+            Outcome::Push(page) => self.push(page, None, cx),
+            Outcome::PushWithInput(page, input) => self.push(page, Some(input), cx),
             Outcome::Pop => self.pop(cx),
             Outcome::PopToRoot => self.pop_to_root(cx),
             Outcome::SetQuery(text) => {
@@ -431,7 +436,7 @@ impl Launcher {
         }
     }
 
-    fn push(&mut self, page: Page, cx: &mut Context<Self>) {
+    fn push(&mut self, page: Page, input: Option<String>, cx: &mut Context<Self>) {
         let observe = page.observe(cx);
         self.stack.push(Pushed {
             page,
@@ -439,8 +444,10 @@ impl Launcher {
             input: self.input.text().to_string(),
             selected: self.selected_item().map(|item| item.id.clone()),
         });
-        self.input.set_text(String::new());
-        self.routed_input.clear();
+        let text = input.unwrap_or_default();
+        self.input.set_text(text.clone());
+        self.input.select_all();
+        self.routed_input = text;
         self.clear_body();
         self.invalidate(true, cx);
     }
@@ -592,6 +599,11 @@ impl Launcher {
     }
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // An open select on a config form goes first; it cannot hold the
+        // keyboard focus itself, since the input keeps it.
+        if modules::config::select::close(cx) {
+            return;
+        }
         if self.menu.take().is_some() {
             cx.notify();
         } else if !self.input.is_empty() {
@@ -901,7 +913,13 @@ impl Launcher {
                     .flex_1()
                     .overflow_hidden()
                     .flex()
-                    .child(div().w(relative(DETAIL_SPLIT)).h_full().child(list))
+                    .child(
+                        div()
+                            .w(relative(DETAIL_SPLIT))
+                            .flex_none()
+                            .h_full()
+                            .child(list),
+                    )
                     .child(
                         div()
                             .w(px(1.))
@@ -910,11 +928,33 @@ impl Launcher {
                     )
                     .child(
                         div()
-                            .id("launcher-detail")
                             .flex_1()
+                            .min_w(px(0.))
                             .h_full()
-                            .overflow_y_scroll()
-                            .children(detail),
+                            .relative()
+                            .child(
+                                div()
+                                    .id("launcher-detail")
+                                    .size_full()
+                                    .overflow_hidden()
+                                    .overflow_y_scroll()
+                                    .track_scroll(&self.detail_scroll)
+                                    .children(detail),
+                            )
+                            // Overlaid on the pane's padding like the list's
+                            // bar, so content never shifts when it appears;
+                            // sized from the last frame, so it shows once the
+                            // content has overflowed.
+                            .when(self.detail_scroll.max_offset().y > px(0.), |el| {
+                                el.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .right_0()
+                                        .child(Scrollbar::vertical(self.detail_scroll.clone())),
+                                )
+                            }),
                     )
                     .into_any_element()
             }
@@ -981,7 +1021,7 @@ impl Launcher {
                         div()
                             .px(px(4.))
                             .py(px(1.))
-                            .rounded(px(3.))
+                            .rounded(Radius::Small.pixels())
                             .bg(colors.element_background)
                             .child(
                                 Label::new(shortcut)
@@ -1051,6 +1091,7 @@ enum NavKey {
 }
 
 fn close(window: &mut Window, cx: &mut App) {
+    modules::config::select::close(cx);
     crate::windows::ShellWindows::set_launcher(cx, None);
     window.remove_window();
 }
@@ -1078,11 +1119,19 @@ impl Render for Launcher {
             .current_page()
             .cloned()
             .and_then(|page| page.render_header(window, cx));
-        let dropdown = self
-            .body
-            .as_ref()
-            .and_then(Body::dropdown)
-            .map(|dropdown| row::dropdown_chips(dropdown, cx));
+        let dropdown = match self.body.as_ref().and_then(Body::dropdown) {
+            Some(dropdown) => {
+                let trailing = dropdown.trailing.clone().map(|action| {
+                    row::dropdown_button(&action, cx)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.run(&action, window, cx);
+                        }))
+                        .into_any_element()
+                });
+                Some(row::dropdown_chips(dropdown, trailing, cx))
+            }
+            None => None,
+        };
         let body = self.render_body(cx);
         let menu = self.render_menu(cx);
 
@@ -1161,6 +1210,7 @@ impl Render for Launcher {
             .relative()
             .child(
                 LauncherFrame::new(render_input_line(&self.input, &self.placeholder(), cx))
+                    .background(cx.theme().surface(Config::global(cx).launcher.opacity))
                     .badge(badge)
                     .loading(loading)
                     .hints(self.footer_left())

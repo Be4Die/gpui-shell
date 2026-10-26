@@ -9,7 +9,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::theme::{ActiveTheme, Color, Spacing};
+use crate::theme::{ActiveTheme, Color, Fade, Opacity, Radius, Spacing};
 use gpui::{
     App, Bounds, BoxShadow, DragMoveEvent, ElementId, EntityId, IntoElement, MouseButton, Pixels,
     Render, RenderOnce, SharedString, Styled, Window, canvas, div, point, prelude::*, px, relative,
@@ -149,7 +149,7 @@ impl RenderOnce for Slider {
 
         let track_height = px(4.0);
         let thumb_size = px(12.0);
-        let ring_color = colors.border_focused.opacity(0.25);
+        let ring_color = colors.border_focused.fade(Opacity::Subtle);
 
         // Capture the track bounds during paint so the click handler can
         // compute a value from the pointer's X position.
@@ -173,7 +173,7 @@ impl RenderOnce for Slider {
                 div()
                     .w_full()
                     .h(track_height)
-                    .rounded_full()
+                    .rounded(Radius::Full.pixels())
                     .bg(track_bg)
                     .relative()
                     // Invisible canvas that captures its own bounds during paint.
@@ -195,7 +195,7 @@ impl RenderOnce for Slider {
                             .top_0()
                             .h_full()
                             .w(relative(fraction))
-                            .rounded_full()
+                            .rounded(Radius::Full.pixels())
                             .bg(fill_bg),
                     )
                     // Thumb - shadcn-style: small white circle with a ring
@@ -207,7 +207,7 @@ impl RenderOnce for Slider {
                             .left(relative(fraction))
                             .ml(-thumb_size / 2.0)
                             .size(thumb_size)
-                            .rounded_full()
+                            .rounded(Radius::Full.pixels())
                             .bg(thumb_bg)
                             .border_1()
                             .border_color(thumb_border)

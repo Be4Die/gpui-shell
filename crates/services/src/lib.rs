@@ -43,8 +43,8 @@ pub use core::ServiceCore;
 pub use jobs::JobQueue;
 pub use lifecycle::{Lifecycle, ManagedService, RunToken, ServiceMode};
 pub use mpris::{
-    MprisCommand, MprisData, MprisPlayerData, MprisPlayerMetadata, MprisSubscriber, PlaybackStatus,
-    PlayerCommand,
+    MprisCommand, MprisData, MprisPlayerData, MprisPlayerMetadata, MprisSubscriber,
+    PlaybackPosition, PlaybackStatus, PlayerCommand,
 };
 pub use network::{
     AccessPoint, ActiveConnectionInfo, ConnectivityState, DeviceState, DeviceType, NetworkCommand,

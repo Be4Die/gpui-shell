@@ -2,10 +2,10 @@
 
 use std::process::Command;
 
-use std::path::PathBuf;
-
 use gpui::{AnyElement, App, FontWeight, ObjectFit, SharedString, div, img, prelude::*, px};
-use ui::{ActiveTheme, Color, Icon, IconSize, Label, LabelCommon, Radius, Spacing, TextSize};
+use ui::{
+    ActiveTheme, Color, Icon, IconSize, Label, LabelCommon, Radius, Spacing, TextSize, image_source,
+};
 
 use super::content::{Detail, Metadata};
 
@@ -16,6 +16,8 @@ pub(super) fn render_detail(detail: &Detail, cx: &App) -> AnyElement {
     let colors = cx.theme().colors();
     let blocks = parse(&detail.markdown);
     let has_metadata = !detail.metadata.is_empty();
+    // A widget alone opens the pane; it only needs a rule when text precedes it.
+    let widget_follows_text = !blocks.is_empty() || has_metadata;
 
     div()
         .w_full()
@@ -47,6 +49,12 @@ pub(super) fn render_detail(detail: &Detail, cx: &App) -> AnyElement {
                                 .map(|(ix, entry)| render_metadata(ix, entry, cx)),
                         ),
                 )
+        })
+        .when_some(detail.widget.as_ref(), |el, widget| {
+            el.when(widget_follows_text, |el| {
+                el.child(div().w_full().h(px(1.)).bg(colors.border_variant))
+            })
+            .child(widget(cx))
         })
         .into_any_element()
 }
@@ -263,7 +271,7 @@ fn render_block(block: Block, cx: &App) -> AnyElement {
             .flex()
             .justify_center()
             .child(
-                img(expand_home(&path))
+                img(image_source(&path))
                     .max_w_full()
                     .max_h(px(IMAGE_MAX_HEIGHT))
                     .object_fit(ObjectFit::Contain),
@@ -271,6 +279,8 @@ fn render_block(block: Block, cx: &App) -> AnyElement {
             .into_any_element(),
         Block::Code(text) => div()
             .w_full()
+            .min_w(px(0.))
+            .overflow_hidden()
             .p(Spacing::Medium.pixels())
             .rounded(Radius::Small.pixels())
             .bg(colors.surface_background)
@@ -279,13 +289,6 @@ fn render_block(block: Block, cx: &App) -> AnyElement {
             .text_color(colors.text)
             .child(text)
             .into_any_element(),
-    }
-}
-
-fn expand_home(path: &str) -> PathBuf {
-    match (path.strip_prefix("~/"), std::env::var("HOME")) {
-        (Some(rest), Ok(home)) => PathBuf::from(home).join(rest),
-        _ => PathBuf::from(path),
     }
 }
 

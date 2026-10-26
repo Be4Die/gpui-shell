@@ -4,9 +4,12 @@
 pub mod apps;
 pub mod calculator;
 pub mod clipboard;
+pub mod config;
 pub mod help;
+pub mod mpris;
 pub mod services;
 pub mod shell;
+pub mod sysinfo;
 pub mod theme;
 pub mod wallpaper;
 pub mod web;
@@ -26,8 +29,11 @@ pub fn registry(config: &ModulesConfig) -> Vec<ModuleDescriptor> {
         wallpaper::descriptor(&config.wallpaper),
         theme::descriptor(&config.themes),
         services::descriptor(&config.services),
+        sysinfo::descriptor(&config.sysinfo),
+        mpris::descriptor(&config.mpris),
         calculator::descriptor(&config.calculator),
         clipboard::descriptor(&config.clipboard),
+        config::descriptor(&config.config),
     ];
     let listed = modules.iter().map(|module| module.meta.clone()).collect();
     modules.push(help::descriptor(&config.help, listed));

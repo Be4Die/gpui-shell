@@ -149,7 +149,7 @@ All of these live in `launcher::content` and `launcher::action`.
 | A list with sections | `List::new().section(Section::new("Title").items(..))`, `Item::new(id, title)` |
 | Extras on the right of a row | `Item::accessory(Accessory::text(..) / ::tag(..) / ::icon(..))`, with `.color(..)` |
 | A message when nothing matches | `List::empty(EmptyView::new(title).description(..).icon(..))` |
-| A filter beside the search | `List::dropdown(Dropdown::new(value, cx, on_change).item(DropdownItem::new(value, title)))`; chips under the search, ← → while it is empty |
+| A filter beside the search | `List::dropdown(Dropdown::new(value, cx, on_change).item(DropdownItem::new(value, title)))`; chips under the search, ← → while it is empty; `.trailing(action)` adds a button after them |
 | The selected item's detail beside the list | `List::show_detail(true)` and `Item::detail(Detail)`; accessories are hidden while the pane shows |
 | A grid of cards | `Grid::new(columns).aspect_ratio(16. / 9.)`; the item's icon (`Thumbnail`, `Path`, `Icon`, `Color`) is the cell |
 | A full detail view | `Detail::new().markdown(..).metadata(Metadata::label / ::tags / ::link / ::Separator)` |

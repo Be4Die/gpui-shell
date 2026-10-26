@@ -5,7 +5,7 @@
 //! meant to sit inside running text ("Press Enter to confirm") rather than
 //! stand alone as a chip strip.
 
-use crate::theme::{ActiveTheme, Appearance, Color, Radius, Spacing, TextSize};
+use crate::theme::{ActiveTheme, Color, Fade, Opacity, Radius, Spacing, TextSize};
 use gpui::{
     BoxShadow, FontStyle, IntoElement, Pixels, RenderOnce, SharedString, Styled, Window, point,
     prelude::*, px,
@@ -72,11 +72,11 @@ impl KeybindingHint {
 impl RenderOnce for KeybindingHint {
     fn render(self, _window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         let colors = cx.theme().colors();
-        let is_light = cx.theme().appearance() == Appearance::Light;
+        let appearance = cx.theme().appearance();
 
-        let border_color = colors.border.opacity(if is_light { 0.6 } else { 0.4 });
+        let border_color = colors.border.fade_on(Opacity::Muted, appearance);
         let bg_color = colors.elevated_surface_background;
-        let shadow_color = colors.text.opacity(if is_light { 0.04 } else { 0.08 });
+        let shadow_color = colors.text.fade_on(Opacity::Shadow, appearance);
 
         let size = self
             .size

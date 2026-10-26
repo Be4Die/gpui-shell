@@ -66,6 +66,12 @@ pub fn execute_command(cmd: CompositorCommand) -> Result<()> {
                 .map_err(|_| anyhow!("Invalid window id '{}' for Niri backend", id))?;
             Action::FocusWindow { id }
         }
+        CompositorCommand::CloseWindow(id) => {
+            let id: u64 = id
+                .parse()
+                .map_err(|_| anyhow!("Invalid window id '{}' for Niri backend", id))?;
+            Action::CloseWindow { id: Some(id) }
+        }
         CompositorCommand::Custom(action, args) => {
             if action == "spawn" {
                 Action::Spawn {

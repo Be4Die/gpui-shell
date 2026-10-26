@@ -27,7 +27,7 @@ impl Render for GradientFadeStory {
                                         .py(Spacing::XSmall.pixels())
                                         .mt(Spacing::Small.pixels())
                                         .ml(Spacing::XSmall.pixels())
-                                        .rounded_sm()
+                                        .rounded(Radius::Small.pixels())
                                         .bg(colors.element_background)
                                         .child(
                                             Label::new(format!("Tab {}", i + 1))
@@ -60,7 +60,7 @@ impl Render for GradientFadeStory {
                                         .py(Spacing::XSmall.pixels())
                                         .mt(Spacing::Small.pixels())
                                         .ml(Spacing::XSmall.pixels())
-                                        .rounded_sm()
+                                        .rounded(Radius::Small.pixels())
                                         .bg(colors.element_background)
                                         .child(
                                             Label::new(format!("Item {}", i + 1))

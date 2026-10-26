@@ -70,10 +70,14 @@ state size and the restart/stop/mode actions.
 
 ### Config vs state
 
-`config.toml` and `theme.toml` are hand-written, so the app never writes
-`config.toml`: what the shell persists itself (dock pins, service modes set
+`config.toml` and `theme.toml` are hand-written, so the app never serializes
+over `config.toml`: what the shell persists itself (dock pins, service modes set
 from `;s`) goes to `state.toml` and overrides its `config.toml` counterpart
-(`crates/app/src/config/state.rs`). A file that stops parsing therefore costs
+(`crates/app/src/config/state.rs`). The one writer is the launcher config
+editor, which goes through `config::store` (`apply` edits the live config and
+remembers the key, `save` writes every pending key in one `toml_edit` pass):
+only the edited keys change, so comments and formatting survive, and a file
+that does not parse is never written. A file that stops parsing therefore costs
 the session its settings but never the file - hot reload keeps the last good
 value, a sticky notification names the file that failed (cleared when it parses
 again), and `gpuishell --validate` prints where the parse gave up.

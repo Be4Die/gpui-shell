@@ -3,14 +3,10 @@
 use serde::{Deserialize, Serialize};
 
 /// Tray module configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrayConfig {
-    pub icon_size: f32,
-}
-
-impl Default for TrayConfig {
-    fn default() -> Self {
-        Self { icon_size: 16.0 }
-    }
+    /// Size in px of each tray icon. Unset, tray icons are as big as the
+    /// bar's other icons, which follows `bar.size`.
+    pub icon_size: Option<f32>,
 }

@@ -1,23 +1,30 @@
 //! MPRIS panel with a list of players and transport controls.
 
-use gpui::{App, Context, FontWeight, Window, div, img, prelude::*, px};
-use services::{MprisCommand, MprisData, MprisSubscriber, PlaybackStatus, PlayerCommand};
+use std::time::Duration;
+
+use crate::windows::ShellPanel;
+use gpui::{AnyElement, App, Context, FontWeight, ObjectFit, Window, div, img, prelude::*, px};
+use services::{
+    MprisCommand, MprisData, MprisPlayerData, MprisSubscriber, PlaybackStatus, PlayerCommand,
+};
 use ui::patterns::PanelSurface;
 use ui::{
     ActiveTheme, ButtonCommon, ButtonSize, ButtonStyle, Clickable, Color, Icon, IconButton,
-    IconName, IconSize, Label, LabelCommon, Radius, Spacing, TextSize, h_flex, v_flex,
+    IconName, IconSize, Label, LabelCommon, Spacing, TextSize, h_flex, image_source,
+    track_progress, v_flex,
 };
 
 use crate::config::ActiveConfig;
 use crate::state::watch;
+
+/// Width of the album-art column; it stretches to the card's height.
+const COVER_WIDTH: f32 = 88.0;
+
 /// Panel content for controlling media players exposed via MPRIS.
 pub struct MprisPanel {
     subscriber: MprisSubscriber,
     data: MprisData,
 }
-
-/// Side of the square album-art slot.
-const COVER_SIZE: f32 = 34.0;
 
 impl MprisPanel {
     pub fn new(subscriber: MprisSubscriber, cx: &mut Context<Self>) -> Self {
@@ -27,15 +34,9 @@ impl MprisPanel {
             this.data = data;
             cx.notify();
         });
+        tick_while_playing(cx, |this| &this.data);
 
         Self { subscriber, data }
-    }
-
-    fn run_command(subscriber: MprisSubscriber, service_name: String, command: PlayerCommand) {
-        subscriber.dispatch(MprisCommand {
-            service_name,
-            command,
-        });
     }
 
     fn status_text(state: PlaybackStatus) -> &'static str {
@@ -46,39 +47,25 @@ impl MprisPanel {
         }
     }
 
-    fn title_for(player: &services::MprisPlayerData) -> String {
+    fn title_for(player: &MprisPlayerData) -> String {
         player
             .metadata
             .as_ref()
             .and_then(|m| m.title.clone())
             .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| {
-                player
-                    .service
-                    .rsplit('.')
-                    .next()
-                    .unwrap_or("Unknown Player")
-                    .to_string()
-            })
+            .unwrap_or_else(|| player.name())
     }
 
-    fn subtitle_for(player: &services::MprisPlayerData) -> String {
-        let artist = player
+    fn artists_for(player: &MprisPlayerData) -> Option<String> {
+        player
             .metadata
             .as_ref()
             .and_then(|m| m.artists.clone())
             .map(|a| a.join(", "))
-            .unwrap_or_default();
-
-        let status = Self::status_text(player.state);
-        if artist.is_empty() {
-            status.to_string()
-        } else {
-            format!("{artist} - {status}")
-        }
+            .filter(|a| !a.is_empty())
     }
 
-    fn sorted_players(&self) -> Vec<services::MprisPlayerData> {
+    fn sorted_players(&self) -> Vec<MprisPlayerData> {
         let mut players = self.data.players.clone();
         players.sort_by_key(|p| match p.state {
             PlaybackStatus::Playing => 0u8,
@@ -88,232 +75,203 @@ impl MprisPanel {
         players
     }
 
-    fn format_duration(us: Option<i64>) -> String {
-        let total_secs = us.unwrap_or(0).max(0) / 1_000_000;
-        let minutes = total_secs / 60;
-        let seconds = total_secs % 60;
-        format!("{minutes}:{seconds:02}")
-    }
-
-    fn render_control_button(
-        id: impl Into<gpui::ElementId>,
+    fn control_button(
+        &self,
+        id: String,
         icon: IconName,
-        on_click: impl Fn(&mut App) + 'static,
-    ) -> impl IntoElement {
-        IconButton::new(id.into(), icon)
+        service_name: &str,
+        command: PlayerCommand,
+    ) -> IconButton {
+        let subscriber = self.subscriber.clone();
+        let service_name = service_name.to_string();
+        IconButton::new(id, icon)
             .style(ButtonStyle::Subtle)
             .size(ButtonSize::Large)
             .icon_size(IconSize::XSmall)
-            .on_click(move |_, _, cx| on_click(cx))
+            .on_click(move |_, _, _| {
+                subscriber.dispatch(MprisCommand {
+                    service_name: service_name.clone(),
+                    command,
+                })
+            })
     }
 
-    /// The album-art slot when there is no art to show, or the user turned
-    /// covers off.
-    fn render_cover_placeholder(cx: &App) -> impl IntoElement {
-        h_flex()
-            .size(px(COVER_SIZE))
+    /// The album art, or a note when there is none or covers are off.
+    fn render_cover(player: &MprisPlayerData, show_cover: bool, cx: &App) -> AnyElement {
+        let slot = div()
+            .flex_none()
+            .w(px(COVER_WIDTH))
+            .flex()
+            .items_center()
             .justify_center()
-            .rounded(Radius::Small.pixels())
-            .bg(cx.theme().colors.elevated_surface_background)
-            .border_1()
-            .border_color(cx.theme().colors.border_variant)
-            .child(
+            .overflow_hidden()
+            .bg(cx.theme().colors.elevated_surface_background);
+        match player.art_url.as_deref().filter(|_| show_cover) {
+            Some(art) => slot.child(
+                img(image_source(art))
+                    .size_full()
+                    .object_fit(ObjectFit::Cover),
+            ),
+            None => slot.child(
                 Icon::new(IconName::Music)
-                    .size(IconSize::XSmall)
-                    .color(Color::Default),
-            )
+                    .size(IconSize::Large)
+                    .color(Color::Muted),
+            ),
+        }
+        .into_any_element()
     }
 
-    fn render_player_card(
-        &self,
-        player: services::MprisPlayerData,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_player_card(&self, player: MprisPlayerData, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let is_playing = player.state == PlaybackStatus::Playing;
-        let title = Self::title_for(&player);
-        let subtitle = Self::subtitle_for(&player);
-        let play_icon = if is_playing {
-            IconName::Pause
-        } else {
-            IconName::Play
-        };
-        let service_name = player.service.clone();
-        let subscriber = self.subscriber.clone();
         let show_cover = cx.config().bar.modules.mpris.show_cover;
-
+        let service = player.service.clone();
+        let name = player.name();
+        let play_icon = match player.state {
+            PlaybackStatus::Playing => IconName::Pause,
+            _ => IconName::Play,
+        };
         let status_color = match player.state {
             PlaybackStatus::Playing => theme.colors.status.success,
             PlaybackStatus::Paused => theme.colors.status.warning,
             PlaybackStatus::Stopped => theme.colors.text_muted,
         };
-
-        let volume = player
-            .volume
-            .map(|v| format!("{:.0}%", v.clamp(0.0, 100.0)))
-            .unwrap_or_else(|| "--".to_string());
         let volume_value = player.volume.unwrap_or(0.0);
-        let duration = Self::format_duration(player.duration_us);
+        let footer = match player.volume {
+            Some(volume) => format!("{name} · {:.0}%", volume.clamp(0.0, 100.0)),
+            None => name,
+        };
+        // Every card keeps the same three rows, so a stopped player shows an
+        // empty line rather than a shorter card.
+        let (position, duration) = match (player.position_us(), player.duration_us) {
+            (Some(position), Some(duration)) if duration > 0 => (position, duration),
+            _ => (0, 0),
+        };
 
-        let can_control = player.can_control;
-        let service_short = service_name
-            .rsplit('.')
-            .next()
-            .unwrap_or("player")
-            .to_string();
-
-        let cover = show_cover
-            .then(|| player.art_url.clone())
-            .flatten()
-            .map(|source| {
-                div()
-                    .size(px(COVER_SIZE))
-                    .rounded(Radius::Small.pixels())
-                    .overflow_hidden()
-                    .border_1()
-                    .border_color(theme.colors.border_variant)
-                    .child(img(source).size_full())
-                    .into_any_element()
-            })
-            .unwrap_or_else(|| Self::render_cover_placeholder(cx).into_any_element());
-
-        let prev_service = service_name.clone();
-        let pp_service = service_name.clone();
-        let next_service = service_name.clone();
-        let dec_service = service_name.clone();
-        let inc_service = service_name.clone();
-
-        let prev_sub = subscriber.clone();
-        let pp_sub = subscriber.clone();
-        let next_sub = subscriber.clone();
-        let dec_sub = subscriber.clone();
-        let inc_sub = subscriber;
-
-        v_flex()
+        let heading = h_flex()
             .w_full()
-            .p(Spacing::Medium.pixels())
-            .panel_card(cx)
+            .justify_between()
+            .items_start()
             .gap(Spacing::Medium.pixels())
             .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
-                    .gap(Spacing::Medium.pixels())
+                v_flex()
+                    .flex_1()
+                    .min_w(px(0.))
                     .child(
-                        h_flex().gap(Spacing::Medium.pixels()).child(cover).child(
-                            v_flex()
-                                .overflow_hidden()
-                                .child(
-                                    Label::new(title)
-                                        .size(TextSize::Small)
-                                        .weight(FontWeight::MEDIUM)
-                                        .truncate(),
-                                )
-                                .child(Label::new(subtitle).size(TextSize::XSmall).truncate()),
-                        ),
+                        Label::new(Self::title_for(&player))
+                            .size(TextSize::Small)
+                            .weight(FontWeight::MEDIUM)
+                            .truncate(),
                     )
                     .child(
-                        Label::new(format!("{}  {}", Self::status_text(player.state), volume))
+                        Label::new(Self::artists_for(&player).unwrap_or_else(|| "No track".into()))
                             .size(TextSize::XSmall)
-                            .color(Color::Custom(status_color)),
+                            .color(Color::Muted)
+                            .truncate(),
                     ),
             )
-            .when(player.duration_us.is_some(), |el| {
-                el.child(
-                    h_flex()
-                        .w_full()
-                        .gap(Spacing::XSmall.pixels())
-                        .child(
-                            Icon::new(IconName::Clock)
-                                .size(IconSize::XSmall)
-                                .color(Color::Muted),
-                        )
-                        .child(
-                            Label::new(duration)
-                                .size(TextSize::XSmall)
-                                .color(Color::Muted),
-                        ),
-                )
-            })
             .child(
-                h_flex()
-                    .w_full()
-                    .justify_between()
+                div().flex_none().whitespace_nowrap().child(
+                    Label::new(Self::status_text(player.state))
+                        .size(TextSize::XSmall)
+                        .color(Color::Custom(status_color)),
+                ),
+            );
+
+        let controls = h_flex()
+            .flex_none()
+            .gap(Spacing::XSmall.pixels())
+            .when(player.can_control, |el| {
+                el.child(self.control_button(
+                    format!("mpris-prev-{service}"),
+                    IconName::SkipBack,
+                    &service,
+                    PlayerCommand::Prev,
+                ))
+                .child(self.control_button(
+                    format!("mpris-play-{service}"),
+                    play_icon,
+                    &service,
+                    PlayerCommand::PlayPause,
+                ))
+                .child(self.control_button(
+                    format!("mpris-next-{service}"),
+                    IconName::SkipForward,
+                    &service,
+                    PlayerCommand::Next,
+                ))
+            })
+            .when(player.can_control && player.volume.is_some(), |el| {
+                el.child(self.control_button(
+                    format!("mpris-dec-{service}"),
+                    IconName::Dash,
+                    &service,
+                    PlayerCommand::Volume(volume_value - 5.0),
+                ))
+                .child(self.control_button(
+                    format!("mpris-inc-{service}"),
+                    IconName::Plus,
+                    &service,
+                    PlayerCommand::Volume(volume_value + 5.0),
+                ))
+            });
+
+        h_flex()
+            .w_full()
+            .panel_card(cx)
+            .overflow_hidden()
+            .child(Self::render_cover(&player, show_cover, cx))
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .px(Spacing::Medium.pixels())
+                    .py(Spacing::Small.pixels())
                     .gap(Spacing::XSmall.pixels())
-                    .child(
-                        Label::new(service_short)
-                            .size(TextSize::XSmall)
-                            .color(Color::Muted),
-                    )
+                    .child(heading)
+                    .child(track_progress(position, duration, cx))
                     .child(
                         h_flex()
+                            .w_full()
+                            .justify_between()
+                            .items_center()
                             .gap(Spacing::XSmall.pixels())
-                            .when(can_control, |el| {
-                                el.child(Self::render_control_button(
-                                    format!("mpris-prev-{}", service_name),
-                                    IconName::SkipBack,
-                                    move |_| {
-                                        Self::run_command(
-                                            prev_sub.clone(),
-                                            prev_service.clone(),
-                                            PlayerCommand::Prev,
-                                        );
-                                    },
-                                ))
-                                .child(Self::render_control_button(
-                                    format!("mpris-play-{}", pp_service),
-                                    play_icon,
-                                    move |_| {
-                                        Self::run_command(
-                                            pp_sub.clone(),
-                                            pp_service.clone(),
-                                            PlayerCommand::PlayPause,
-                                        );
-                                    },
-                                ))
-                                .child(
-                                    Self::render_control_button(
-                                        format!("mpris-next-{}", next_service),
-                                        IconName::SkipForward,
-                                        move |_| {
-                                            Self::run_command(
-                                                next_sub.clone(),
-                                                next_service.clone(),
-                                                PlayerCommand::Next,
-                                            );
-                                        },
-                                    ),
-                                )
-                            })
-                            .when(can_control && player.volume.is_some(), |el| {
-                                el.child(Self::render_control_button(
-                                    format!("mpris-dec-{}", dec_service),
-                                    IconName::Dash,
-                                    move |_| {
-                                        Self::run_command(
-                                            dec_sub.clone(),
-                                            dec_service.clone(),
-                                            PlayerCommand::Volume(volume_value - 5.0),
-                                        );
-                                    },
-                                ))
-                                .child(
-                                    Self::render_control_button(
-                                        format!("mpris-inc-{}", inc_service),
-                                        IconName::Plus,
-                                        move |_| {
-                                            Self::run_command(
-                                                inc_sub.clone(),
-                                                inc_service.clone(),
-                                                PlayerCommand::Volume(volume_value + 5.0),
-                                            );
-                                        },
-                                    ),
-                                )
-                            }),
+                            .child(
+                                Label::new(footer)
+                                    .size(TextSize::XSmall)
+                                    .color(Color::Muted)
+                                    .truncate(),
+                            )
+                            .child(controls),
                     ),
             )
+            .into_any_element()
     }
+}
+
+/// Redraw once a second while a player with a known position is playing,
+/// so the progress line moves between service updates.
+pub(crate) fn tick_while_playing<V: 'static>(
+    cx: &mut Context<V>,
+    data: impl Fn(&V) -> &MprisData + 'static,
+) {
+    cx.spawn(async move |this, cx| {
+        loop {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let alive = this.update(cx, |this, cx| {
+                let playing = data(this)
+                    .players
+                    .iter()
+                    .any(|p| p.state == PlaybackStatus::Playing && p.position.is_some());
+                if playing {
+                    cx.notify();
+                }
+            });
+            if alive.is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 impl Render for MprisPanel {
@@ -326,7 +284,7 @@ impl Render for MprisPanel {
             .w_full()
             .h_full()
             .p(Spacing::XLarge.pixels())
-            .panel_surface(cx)
+            .shell_panel(cx)
             .overflow_hidden()
             .child(
                 v_flex()
@@ -365,9 +323,11 @@ impl Render for MprisPanel {
                                 .flex_grow_1()
                                 .overflow_hidden()
                                 .gap(Spacing::Medium.pixels())
-                                .children(players.into_iter().map(|player| {
-                                    self.render_player_card(player, cx).into_any_element()
-                                })),
+                                .children(
+                                    players
+                                        .into_iter()
+                                        .map(|player| self.render_player_card(player, cx)),
+                                ),
                         )
                     }),
             )

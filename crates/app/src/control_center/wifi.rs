@@ -10,8 +10,8 @@ use gpui::{
 };
 use services::{AccessPoint, NetworkCommand, NetworkData, WifiAttempt, WifiAttemptStatus};
 use ui::{
-    ActiveTheme, Color, Icon, IconName, IconSize, InputBuffer, Radius, Spacing, Spinner, TextSize,
-    render_masked_input_line,
+    ActiveTheme, Color, Fade, Icon, IconName, IconSize, InputBuffer, Opacity, Radius, Spacing,
+    Spinner, TextSize, render_masked_input_line,
 };
 
 use crate::icons;
@@ -537,7 +537,7 @@ impl WifiSection {
                         .px(Spacing::Medium.pixels())
                         .py(Spacing::Small.pixels())
                         .rounded(Radius::Small.pixels())
-                        .bg(status_error.opacity(0.12))
+                        .bg(status_error.fade(Opacity::Faint))
                         .child(
                             Icon::new(IconName::CircleAlert)
                                 .size(IconSize::XSmall)
@@ -566,7 +566,7 @@ impl WifiSection {
                     .rounded(Radius::Small.pixels())
                     .text_size(TextSize::Small.rems())
                     .text_color(bg_primary)
-                    .when(!can_submit, |el| el.opacity(0.6))
+                    .when(!can_submit, |el| el.opacity(Opacity::Soft.value()))
                     .when(can_submit, |el| {
                         el.cursor_pointer().on_mouse_down(
                             MouseButton::Left,

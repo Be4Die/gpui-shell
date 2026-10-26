@@ -2,7 +2,7 @@
 //! a secondary action (e.g. dropdown trigger) on the right, visually
 //! separated by a divider.
 
-use crate::theme::ActiveTheme;
+use crate::theme::{ActiveTheme, Fade, Opacity, Radius};
 use gpui::{
     App, BoxShadow, IntoElement, ParentElement, RenderOnce, Styled, Window, div, hsla, point,
     prelude::*, px, relative,
@@ -77,9 +77,9 @@ impl RenderOnce for SplitButton {
         let is_filled = self.style == SplitButtonStyle::Filled;
         let is_outlined = self.style == SplitButtonStyle::Outlined;
         let divider_color = match self.style {
-            SplitButtonStyle::Filled => colors.border.opacity(0.5),
-            SplitButtonStyle::Outlined => colors.border.opacity(0.6),
-            SplitButtonStyle::Transparent => colors.border.opacity(0.3),
+            SplitButtonStyle::Filled => colors.border.fade(Opacity::Muted),
+            SplitButtonStyle::Outlined => colors.border.fade(Opacity::Soft),
+            SplitButtonStyle::Transparent => colors.border.fade(Opacity::Subtle),
         };
 
         // Both sides render with transparent chrome - the outer container is
@@ -94,7 +94,7 @@ impl RenderOnce for SplitButton {
         };
 
         h_flex()
-            .rounded_sm()
+            .rounded(Radius::Small.pixels())
             .overflow_hidden()
             .when(is_filled, |this| {
                 this.bg(colors.element_hover)

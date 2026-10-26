@@ -1,8 +1,11 @@
 //! Launcher chrome: the bordered surface that holds a query line, a body, and
 //! a footer hint bar.
 
-use gpui::{AnyElement, App, IntoElement, RenderOnce, SharedString, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, App, Hsla, IntoElement, RenderOnce, SharedString, Window, div, prelude::*, px,
+};
 
+use super::surface_radius;
 use crate::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, Spinner, TextSize};
 
 /// The launcher surface: query row, body, footer hint bar.
@@ -15,6 +18,7 @@ pub struct LauncherFrame {
     badge: Option<SharedString>,
     hints: Option<SharedString>,
     actions: Option<AnyElement>,
+    background: Option<Hsla>,
     body: Vec<AnyElement>,
 }
 
@@ -29,8 +33,15 @@ impl LauncherFrame {
             badge: None,
             hints: None,
             actions: None,
+            background: None,
             body: Vec::new(),
         }
+    }
+
+    /// Surface fill in place of the theme's, e.g. at a configured opacity.
+    pub fn background(mut self, background: Hsla) -> Self {
+        self.background = Some(background);
+        self
     }
 
     /// Replace the search icon.
@@ -72,10 +83,11 @@ impl ParentElement for LauncherFrame {
 
 impl RenderOnce for LauncherFrame {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let colors = cx.theme().colors();
-        let (text, muted, disabled) = (colors.text, colors.text_muted, colors.text_disabled);
-        let (background, border, badge_bg) =
-            (colors.background, colors.border, colors.element_background);
+        let theme = cx.theme();
+        let colors = theme.colors();
+        let (text, muted) = (colors.text, colors.text_muted);
+        let background = self.background.unwrap_or_else(|| theme.surface(None));
+        let (border, badge_bg) = (colors.border, colors.element_background);
         let hairline = move || div().w_full().h(px(1.)).bg(border);
         let has_footer = self.hints.is_some() || self.actions.is_some();
 
@@ -87,7 +99,7 @@ impl RenderOnce for LauncherFrame {
             .bg(background)
             .border_1()
             .border_color(border)
-            .rounded(Radius::Large.pixels())
+            .rounded(surface_radius())
             .text_color(text)
             // Query row
             .child(
@@ -119,7 +131,7 @@ impl RenderOnce for LauncherFrame {
                         el.child(
                             div()
                                 .px(Spacing::Medium.pixels())
-                                .py(px(3.))
+                                .py(Spacing::XXSmall.pixels())
                                 .rounded(Radius::Small.pixels())
                                 .bg(badge_bg)
                                 .text_size(TextSize::Small.rems())
@@ -159,7 +171,7 @@ impl RenderOnce for LauncherFrame {
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_size(TextSize::XSmall.rems())
-                                .text_color(disabled)
+                                .text_color(muted)
                                 .children(self.hints),
                         )
                         .children(self.actions),
@@ -188,13 +200,13 @@ where
             div()
                 .flex()
                 .items_center()
-                .gap(px(Spacing::Medium.value() - 2.0))
+                .gap(Spacing::Small.pixels())
                 .child(action.into())
                 .child(
                     div()
-                        .px(px(Spacing::Medium.value() - 2.0))
-                        .py(px(2.))
-                        .rounded(px(Radius::Small.value() - 1.0))
+                        .px(Spacing::Small.pixels())
+                        .py(Spacing::XXSmall.pixels())
+                        .rounded(Radius::XSmall.pixels())
                         .bg(key_bg)
                         .text_size(TextSize::XSmall.rems())
                         .child(key.into()),

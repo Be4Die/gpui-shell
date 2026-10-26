@@ -1,9 +1,29 @@
-use gpui::prelude::*;
-use gpui::{App, Context, MouseButton, div, img, px};
-use services::{CompositorCommand, Notification, NotificationCommand, NotificationSubscriber};
-use ui::{ActiveTheme, Radius, Spacing, TextSize};
+//! The body of a notification card, shared by the popups and the center:
+//! a header line (app icon, name, time, dismiss), the summary and body with
+//! the image beside them, and the actions when there is room.
 
+use gpui::prelude::*;
+use std::path::Path;
+
+use gpui::{
+    AnyElement, App, Context, EntityId, FontWeight, MouseButton, Size, Window, div, img, px,
+};
+use services::{CompositorCommand, Notification, NotificationCommand, NotificationSubscriber};
+use ui::{
+    ActiveTheme, Button, ButtonCommon, ButtonSize, ButtonStyle, Clickable, Color, Icon, IconSize,
+    Radius, Spacing, TextSize, thumbnail,
+};
+
+use crate::config::ActiveConfig;
+use crate::launcher::row::thumbnail_image;
 use crate::state::AppState;
+
+/// Side of the image slot.
+const IMAGE_SIZE: f32 = 56.0;
+/// Side of the app icon in the header.
+const APP_ICON_SIZE: f32 = 18.0;
+/// Body lines a full card shows before it is cut.
+const BODY_LINES: usize = 8;
 
 /// A click on a card with a default action. Wayland apps can't raise their
 /// own window without an activation token, so the compositor focuses it.
@@ -22,209 +42,185 @@ pub(super) fn is_critical(notification: &Notification) -> bool {
     notification.urgency == 2
 }
 
-/// `compact`: one body line, no actions (a popup at rest).
-pub(super) fn notification_card_body<V>(
+/// `compact`: one line each of summary and body, no actions (a popup at rest).
+pub(super) fn notification_card_body<V: 'static>(
     notification: &Notification,
+    window: &Window,
     cx: &Context<V>,
-    show_image: bool,
     compact: bool,
     subscriber: &NotificationSubscriber,
-) -> gpui::AnyElement {
+) -> AnyElement {
     let theme = cx.theme();
-    let app_name = notification.app_name.clone();
-    let app_icon_name = notification.app_icon.clone();
-    let icon_source = notification.app_icon_path.as_ref().map(|p| {
-        tracing::debug!(
-            "Loading icon for {}: {} -> {:?}",
-            app_name,
-            notification.app_icon,
-            p
-        );
-        p.clone()
-    });
-    let image_source = notification.image_path.clone();
+    let owner = cx.entity_id();
+    let id = notification.id;
     let summary = notification.summary.clone();
-    let body = notification.body.clone();
-    let actions = notification.actions.clone();
+    // One line at rest: the sender's line breaks would each take a row.
+    let body = if compact {
+        notification
+            .body
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        notification.body.clone()
+    };
     let timestamp = format_notification_time(notification.timestamp_ms);
-    let urgency_color = urgency_color(notification.urgency, cx);
+    let close = cx.config().notification.icons.close();
+    let dismiss = subscriber.clone();
+    let dismiss_hover = theme.colors.ghost_element_hover;
+    let app_name_color = if is_critical(notification) {
+        theme.colors.status.error
+    } else {
+        theme.colors.text_muted
+    };
 
     div()
         .w_full()
         .flex()
-        .items_start()
-        .gap(Spacing::Medium.pixels())
+        .flex_col()
+        .gap(Spacing::Small.pixels())
         .child(
             div()
-                .w(px(3.0))
-                .flex_shrink_0()
-                .rounded(Radius::Small.pixels())
-                .bg(urgency_color)
-                .h_full(),
-        )
-        .child(
-            // Icon/Image area: Show image if available, otherwise show app icon or fallback
-            match (&icon_source, &image_source, show_image) {
-                // If we have both icon and image, show a larger image with small icon overlay
-                (Some(icon), Some(img_src), true) => div()
-                    .w(px(64.0))
-                    .h(px(64.0))
-                    .flex_shrink_0()
-                    .rounded(Radius::Medium.pixels())
-                    .overflow_hidden()
-                    .relative()
-                    .child(
-                        img(img_src.clone())
-                            .size_full()
-                            .object_fit(gpui::ObjectFit::Cover),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .bottom(px(4.0))
-                            .right(px(4.0))
-                            .size(px(24.0))
-                            .rounded(Radius::Medium.pixels())
-                            .bg(theme.colors.background)
-                            .border_1()
-                            .border_color(theme.colors.border)
-                            .shadow_md()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                img(icon.clone())
-                                    .size(px(16.0))
-                                    .object_fit(gpui::ObjectFit::Contain),
-                            ),
-                    )
-                    .into_any_element(),
-                // If only image, show larger image
-                (_, Some(img_src), true) => div()
-                    .w(px(64.0))
-                    .h(px(64.0))
-                    .flex_shrink_0()
-                    .rounded(Radius::Medium.pixels())
-                    .overflow_hidden()
-                    .child(
-                        img(img_src.clone())
-                            .size_full()
-                            .object_fit(gpui::ObjectFit::Cover),
-                    )
-                    .into_any_element(),
-                // Otherwise show app icon or fallback in 64x64px container
-                _ => div()
-                    .size(px(64.0))
-                    .flex_shrink_0()
-                    .rounded(Radius::Medium.pixels())
-                    .bg(theme.colors.surface_background)
-                    .border_1()
-                    .border_color(theme.colors.border_variant)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        icon_source
-                            .map(|src| {
-                                img(src)
-                                    .size(px(28.0))
-                                    .object_fit(gpui::ObjectFit::Contain)
-                                    .into_any_element()
-                            })
-                            .unwrap_or_else(|| {
-                                div()
-                                    .text_size(TextSize::Medium.rems())
-                                    .text_color(theme.colors.text)
-                                    .child(icon_fallback(&app_name, &app_icon_name))
-                                    .into_any_element()
-                            }),
-                    )
-                    .into_any_element(),
-            },
-        )
-        .child(
-            div()
-                .flex_1()
                 .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .overflow_hidden()
-                .when(show_image, |el| el.pr(Spacing::XXXLarge.pixels()))
+                .items_center()
+                .gap(Spacing::Small.pixels())
+                .child(app_icon_slot(notification, cx))
                 .child(
                     div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(TextSize::XSmall.rems())
+                        .text_color(app_name_color)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(notification.app_name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .text_size(TextSize::XSmall.rems())
+                        .text_color(theme.colors.text_muted)
+                        .child(timestamp),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .p(px(2.0))
+                        .rounded(Radius::Small.pixels())
+                        .cursor_pointer()
+                        .hover(move |el| el.bg(dismiss_hover))
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            // Not a click on the card itself.
+                            cx.stop_propagation();
+                            dismiss.dispatch(NotificationCommand::Dismiss(id));
+                        })
+                        .child(Icon::new(close).size(IconSize::XSmall).color(Color::Muted)),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(Spacing::Medium.pixels())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
                         .flex()
-                        .items_center()
-                        .gap(Spacing::Medium.pixels())
+                        .flex_col()
+                        .gap(px(2.0))
                         .child(
                             div()
-                                .flex_1()
-                                .text_size(TextSize::XSmall.rems())
+                                .text_size(TextSize::Small.rems())
+                                .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.colors.text)
-                                .overflow_hidden()
+                                .line_height(px(18.0))
                                 .text_ellipsis()
-                                .whitespace_nowrap()
-                                .child(app_name),
+                                .line_clamp(if compact { 1 } else { 2 })
+                                .child(summary),
                         )
-                        .child(
-                            div()
-                                .text_size(TextSize::XSmall.rems())
-                                .text_color(theme.colors.text)
-                                .flex_shrink_0()
-                                .child(timestamp),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(TextSize::Small.rems())
-                        .text_color(theme.colors.text)
-                        .line_height(px(18.0))
-                        .child(summary),
-                )
-                .when(!body.is_empty(), |el| {
-                    el.child(
-                        div()
-                            .text_size(TextSize::XSmall.rems())
-                            .text_color(theme.colors.text_muted)
-                            .line_height(px(16.0))
-                            .when(compact, |el| el.line_clamp(1))
-                            .child(body),
-                    )
-                })
-                .when(!actions.is_empty() && !compact, |el| {
-                    el.child(
-                        div()
-                            .mt(px(4.0))
-                            .flex()
-                            .flex_wrap()
-                            .gap(Spacing::XSmall.pixels())
-                            .children(actions.into_iter().map(|(key, label)| {
-                                let sub = subscriber.clone();
-                                let notification_id = notification.id;
+                        .when(!body.is_empty(), |el| {
+                            el.child(
                                 div()
-                                    .px(Spacing::Medium.pixels())
-                                    .py(px(2.0))
-                                    .rounded(Radius::Small.pixels())
-                                    .bg(theme.colors.elevated_surface_background)
-                                    .border_1()
-                                    .border_color(theme.colors.border_variant)
-                                    .text_size(TextSize::XSmall.rems())
-                                    .text_color(theme.colors.text)
-                                    .cursor_pointer()
-                                    .hover(move |el| {
-                                        el.bg(theme.colors.element_hover)
-                                            .text_color(theme.colors.text)
-                                    })
-                                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                        // Not a click on the card itself.
-                                        cx.stop_propagation();
-                                        sub.dispatch(NotificationCommand::InvokeAction(
-                                            notification_id,
-                                            key.clone(),
-                                        ));
-                                    })
-                                    .child(label)
-                            })),
-                    )
+                                    .text_size(TextSize::Small.rems())
+                                    .text_color(theme.colors.text_muted)
+                                    .line_height(px(17.0))
+                                    .text_ellipsis()
+                                    .line_clamp(if compact { 1 } else { BODY_LINES })
+                                    .child(body),
+                            )
+                        }),
+                )
+                .when_some(notification.image_path.clone(), |el, path| {
+                    el.child(image_slot(&path, owner, window, cx))
+                }),
+        )
+        .when(!notification.actions.is_empty() && !compact, |el| {
+            el.child(actions_row(notification, subscriber))
+        })
+        .into_any_element()
+}
+
+fn app_icon_slot<V>(notification: &Notification, cx: &Context<V>) -> AnyElement {
+    let theme = cx.theme();
+    match &notification.app_icon_path {
+        Some(path) => img(path.clone())
+            .size(px(APP_ICON_SIZE))
+            .flex_shrink_0()
+            .object_fit(gpui::ObjectFit::Contain)
+            .into_any_element(),
+        None => div()
+            .size(px(APP_ICON_SIZE))
+            .flex_shrink_0()
+            .rounded(Radius::Small.pixels())
+            .bg(theme.colors.element_background)
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(TextSize::XSmall.rems())
+            .text_color(theme.colors.text_muted)
+            .child(icon_fallback(
+                &notification.app_name,
+                &notification.app_icon,
+            ))
+            .into_any_element(),
+    }
+}
+
+fn image_slot<V>(path: &Path, owner: EntityId, window: &Window, cx: &Context<V>) -> AnyElement {
+    div()
+        .size(px(IMAGE_SIZE))
+        .flex_shrink_0()
+        .rounded(Radius::Medium.pixels())
+        .overflow_hidden()
+        .bg(cx.theme().colors.surface_background)
+        .children(notification_image(path, owner, window, cx))
+        .into_any_element()
+}
+
+fn actions_row(notification: &Notification, subscriber: &NotificationSubscriber) -> AnyElement {
+    let id = notification.id;
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(Spacing::XSmall.pixels())
+        // A button press is not a click on the card.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .children(
+            notification
+                .actions
+                .iter()
+                .enumerate()
+                .map(|(index, (key, label))| {
+                    let sub = subscriber.clone();
+                    let key = key.clone();
+                    Button::new(("notification-action", index), label.clone())
+                        .style(ButtonStyle::Outlined)
+                        .size(ButtonSize::Compact)
+                        .on_click(move |_, _, _| {
+                            sub.dispatch(NotificationCommand::InvokeAction(id, key.clone()));
+                        })
                 }),
         )
         .into_any_element()
@@ -251,11 +247,27 @@ fn format_notification_time(timestamp_ms: i64) -> String {
         .unwrap_or_default()
 }
 
-fn urgency_color<V>(urgency: u8, cx: &Context<V>) -> gpui::Hsla {
-    let theme = cx.theme();
-    match urgency {
-        2 => theme.colors.status.error,
-        0 => theme.colors.text_muted,
-        _ => theme.colors.accent,
+/// The notification's image at slot size. Raster files go through the
+/// thumbnail cache so a full-size screenshot is never decoded whole; while
+/// it loads the slot stays empty and the owner is redrawn when it is ready.
+fn notification_image(
+    path: &Path,
+    owner: EntityId,
+    window: &Window,
+    cx: &App,
+) -> Option<AnyElement> {
+    let fit = |source: gpui::ImageSource| {
+        img(source)
+            .size_full()
+            .object_fit(gpui::ObjectFit::Cover)
+            .into_any_element()
+    };
+    if !thumbnail::is_thumbnailable(path) {
+        return Some(fit(path.to_path_buf().into()));
     }
+    let slot = Size {
+        width: px(IMAGE_SIZE),
+        height: px(IMAGE_SIZE),
+    };
+    thumbnail_image(path, None, slot, owner, window, cx).map(|image| fit(image.into()))
 }

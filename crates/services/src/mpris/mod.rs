@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 
 use anyhow::Context;
-use dbus::MprisPlayerProxy;
+use dbus::{MprisPlayerProxy, MprisRootProxy};
 use futures_signals::signal::Mutable;
 use futures_util::StreamExt;
 use futures_util::future::join_all;
@@ -26,6 +26,7 @@ enum MprisEvent {
     Metadata(String),
     Volume(String),
     Playback(String),
+    Seeked(String),
 }
 
 /// Current playback state reported by MPRIS.
@@ -90,11 +91,18 @@ fn metadata_art_url(value: &HashMap<String, OwnedValue>) -> Option<String> {
     value
         .get("mpris:artUrl")
         .and_then(|v| v.clone().try_into().ok())
-        .filter(|source: &String| {
-            source.starts_with('/')
-                || source.starts_with("file://")
+        .and_then(|source: String| {
+            // A path or an http(s) URL: both are things `img` can load.
+            if let Some(path) = source.strip_prefix("file://") {
+                Some(path.to_string())
+            } else if source.starts_with('/')
                 || source.starts_with("http://")
                 || source.starts_with("https://")
+            {
+                Some(source)
+            } else {
+                None
+            }
         })
 }
 
@@ -114,12 +122,67 @@ fn metadata_duration_us(value: &HashMap<String, OwnedValue>) -> Option<i64> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MprisPlayerData {
     pub service: String,
+    /// The player's own display name (`Identity`), when it has one.
+    pub identity: Option<String>,
     pub metadata: Option<MprisPlayerMetadata>,
     pub art_url: Option<String>,
     pub duration_us: Option<i64>,
     pub volume: Option<f64>,
     pub state: PlaybackStatus,
     pub can_control: bool,
+    pub position: Option<PlaybackPosition>,
+}
+
+/// Where playback was when the service last asked. Players do not announce
+/// position changes, so the UI extrapolates from this while playing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaybackPosition {
+    pub position_us: i64,
+    /// Unix time in milliseconds of the reading.
+    pub observed_ms: i64,
+}
+
+impl MprisPlayerData {
+    /// The current playback position, extrapolated while playing and clamped
+    /// to the track length.
+    pub fn position_us(&self) -> Option<i64> {
+        let position = self.position?;
+        let mut current = position.position_us;
+        if self.state == PlaybackStatus::Playing {
+            let elapsed_ms = chrono::Utc::now().timestamp_millis() - position.observed_ms;
+            current += elapsed_ms.max(0) * 1000;
+        }
+        if let Some(duration) = self.duration_us {
+            current = current.min(duration);
+        }
+        Some(current.max(0))
+    }
+
+    /// What to call the player: its identity, else the bus name without
+    /// the MPRIS prefix and instance suffix.
+    pub fn name(&self) -> String {
+        self.identity
+            .as_deref()
+            .map(str::trim)
+            .filter(|identity| !identity.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| player_name(&self.service))
+    }
+}
+
+/// `org.mpris.MediaPlayer2.brave.instance_2620` reads as `Brave`.
+fn player_name(service: &str) -> String {
+    let short = service
+        .strip_prefix(MPRIS_PLAYER_SERVICE_PREFIX)
+        .unwrap_or(service)
+        .split('.')
+        .next()
+        .unwrap_or(service);
+    let mut chars = short.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => "Player".to_string(),
+    }
 }
 
 /// Complete MPRIS service state.
@@ -234,6 +297,7 @@ impl ManagedService for MprisSubscriber {
                     });
                     size_of::<MprisPlayerData>()
                         + player.service.len()
+                        + player.identity.as_ref().map_or(0, String::len)
                         + player.art_url.as_ref().map_or(0, String::len)
                         + metadata
                 })
@@ -270,6 +334,13 @@ async fn fetch_mpris_data(conn: &Connection) -> anyhow::Result<MprisData> {
             Err(_) => return None,
         };
 
+        let identity = match MprisRootProxy::builder(conn).destination(name.as_str()) {
+            Ok(builder) => match builder.build().await {
+                Ok(root) => root.identity().await.ok(),
+                Err(_) => None,
+            },
+            Err(_) => None,
+        };
         let metadata_raw = proxy.metadata().await.ok();
         let metadata = metadata_raw.clone().map(MprisPlayerMetadata::from);
         let art_url = metadata_raw.as_ref().and_then(metadata_art_url);
@@ -281,15 +352,18 @@ async fn fetch_mpris_data(conn: &Connection) -> anyhow::Result<MprisData> {
             .map(PlaybackStatus::from)
             .unwrap_or_default();
         let can_control = proxy.can_control().await.unwrap_or(false);
+        let position = read_position(&proxy).await;
 
         Some(MprisPlayerData {
             service: name.clone(),
+            identity,
             metadata,
             art_url,
             duration_us,
             volume,
             state,
             can_control,
+            position,
         })
     }))
     .await
@@ -298,6 +372,15 @@ async fn fetch_mpris_data(conn: &Connection) -> anyhow::Result<MprisData> {
     .collect();
 
     Ok(MprisData { players })
+}
+
+/// Only meaningful alongside a track; a stopped player reports nothing.
+async fn read_position(proxy: &MprisPlayerProxy<'_>) -> Option<PlaybackPosition> {
+    let position_us = proxy.position().await.ok()?;
+    Some(PlaybackPosition {
+        position_us,
+        observed_ms: chrono::Utc::now().timestamp_millis(),
+    })
 }
 
 /// One attempt: connect, then follow players. Ends only with an error, which
@@ -387,6 +470,15 @@ async fn run_listener(
                     .boxed(),
             );
 
+            let service = player.service.clone();
+            streams.push(
+                proxy
+                    .receive_seeked()
+                    .await?
+                    .map(move |_| MprisEvent::Seeked(service.clone()))
+                    .boxed(),
+            );
+
             proxies.insert(player.service.clone(), proxy);
         }
 
@@ -410,6 +502,7 @@ async fn run_listener(
             let mut metadata_services = HashSet::new();
             let mut volume_services = HashSet::new();
             let mut playback_services = HashSet::new();
+            let mut position_services = HashSet::new();
 
             for event in batch {
                 match event {
@@ -426,6 +519,10 @@ async fn run_listener(
                         trace!("MPRIS playback changed: {}", service);
                         playback_services.insert(service);
                     }
+                    MprisEvent::Seeked(service) => {
+                        trace!("MPRIS seeked: {}", service);
+                        position_services.insert(service);
+                    }
                 }
             }
 
@@ -433,6 +530,10 @@ async fn run_listener(
                 debug!("MPRIS topology changed, rebuilding player snapshot/streams");
                 break;
             }
+
+            // A new track or a play/pause moves the position too.
+            position_services.extend(metadata_services.iter().cloned());
+            position_services.extend(playback_services.iter().cloned());
 
             for service in metadata_services {
                 let Some(proxy) = proxies.get(service.as_str()) else {
@@ -496,6 +597,49 @@ async fn run_listener(
                     player.state = new_state;
                 }
             }
+
+            for service in position_services {
+                let Some(proxy) = proxies.get(service.as_str()) else {
+                    continue;
+                };
+                let position = read_position(proxy).await;
+                let mut guard = data.lock_mut();
+                if let Some(player) = guard.players.iter_mut().find(|p| p.service == service)
+                    && player.position != position
+                {
+                    player.position = position;
+                }
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_names_drop_the_bus_prefix_and_instance() {
+        assert_eq!(player_name("org.mpris.MediaPlayer2.spotify"), "Spotify");
+        assert_eq!(
+            player_name("org.mpris.MediaPlayer2.brave.instance_2620"),
+            "Brave"
+        );
+        assert_eq!(player_name("mpv"), "Mpv");
+    }
+
+    #[test]
+    fn identity_wins_over_the_bus_name() {
+        let player = MprisPlayerData {
+            service: "org.mpris.MediaPlayer2.brave.instance_2620".into(),
+            identity: Some("Brave".into()),
+            ..Default::default()
+        };
+        assert_eq!(player.name(), "Brave");
+        let player = MprisPlayerData {
+            identity: Some("  ".into()),
+            ..player
+        };
+        assert_eq!(player.name(), "Brave");
     }
 }

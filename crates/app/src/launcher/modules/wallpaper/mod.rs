@@ -176,7 +176,7 @@ fn palette_chip(
 ) -> impl IntoElement {
     let colors = cx.theme().colors();
     let active = palette_is_active(&palette, cx.theme());
-    let swatch = |color: Hsla| div().size(px(10.)).rounded_full().bg(color);
+    let swatch = |color: Hsla| div().size(px(10.)).rounded(Radius::Full.pixels()).bg(color);
 
     div()
         .id(id)

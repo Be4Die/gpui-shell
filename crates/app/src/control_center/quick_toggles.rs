@@ -3,9 +3,10 @@
 //! Provides compact modules for WiFi, Bluetooth, VPN, Microphone, and Camera
 //! status.
 
-use gpui::{App, MouseButton, div, prelude::*, px};
+use gpui::{App, Hsla, MouseButton, div, prelude::*, px};
 use services::{AudioCommand, BluetoothCommand, BluetoothState, NetworkCommand};
-use ui::{ActiveTheme, Color, Icon, IconName, IconSize, Radius, Spacing, TextSize};
+use ui::patterns::surface_radius;
+use ui::{ActiveTheme, Color, Fade, Icon, IconName, IconSize, Opacity, Spacing, TextSize};
 
 use crate::state::AppState;
 
@@ -203,22 +204,14 @@ fn render_expandable_module(
     on_expand: impl Fn(&mut App) + 'static,
 ) -> impl IntoElement {
     let theme = cx.theme();
-
-    let bg_secondary = theme.colors.surface_background;
-    let border_subtle = theme.colors.border_variant;
-    let interactive_hover = theme.colors.element_hover;
-    let accent_primary = theme.colors.accent;
-    let text_primary = theme.colors.text;
-    let text_secondary = theme.colors.text;
-    let text_muted = theme.colors.text_muted;
-
-    let border_color = if expanded {
-        accent_primary
+    let ink = ToggleInk::new(theme, active);
+    // Expanded shows as an accent outline on an off toggle; an on toggle is
+    // already accent all over.
+    let border = if expanded && !active {
+        theme.colors.accent
     } else {
-        border_subtle
+        ink.border
     };
-    let icon_color = if active { accent_primary } else { text_muted };
-    let status_color = if active { text_secondary } else { text_muted };
 
     div()
         .id(id)
@@ -226,10 +219,10 @@ fn render_expandable_module(
         .items_center()
         .gap(Spacing::XSmall.pixels())
         .flex_1()
-        .rounded(Radius::Medium.pixels())
+        .rounded(surface_radius())
         .border_1()
-        .border_color(border_color)
-        .bg(bg_secondary)
+        .border_color(border)
+        .bg(ink.background)
         .overflow_hidden()
         .child(
             div()
@@ -240,30 +233,30 @@ fn render_expandable_module(
                 .px(Spacing::Medium.pixels())
                 .py(Spacing::XSmall.pixels())
                 .cursor_pointer()
-                .hover(move |s| s.bg(interactive_hover))
+                .hover(move |s| s.bg(ink.hover))
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     on_toggle(cx);
                 })
                 .child(
                     Icon::new(icon)
                         .size(IconSize::XSmall)
-                        .color(Color::Custom(icon_color)),
+                        .color(Color::Custom(ink.icon)),
                 )
                 .child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap(px(2.))
+                        .gap(Spacing::XXSmall.pixels())
                         .child(
                             div()
                                 .text_size(TextSize::XSmall.rems())
-                                .text_color(text_primary)
+                                .text_color(ink.text)
                                 .child(label),
                         )
                         .child(
                             div()
                                 .text_size(TextSize::XSmall.rems())
-                                .text_color(status_color)
+                                .text_color(ink.muted)
                                 .child(status),
                         ),
                 ),
@@ -276,7 +269,7 @@ fn render_expandable_module(
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .hover(move |s| s.bg(interactive_hover))
+                .hover(move |s| s.bg(ink.hover))
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     on_expand(cx);
                 })
@@ -287,7 +280,7 @@ fn render_expandable_module(
                         IconName::ChevronDown
                     })
                     .size(IconSize::XSmall)
-                    .color(Color::Muted),
+                    .color(Color::Custom(ink.muted)),
                 ),
         )
 }
@@ -303,13 +296,9 @@ fn render_simple_module(
     on_click: impl Fn(&mut App) + 'static,
 ) -> impl IntoElement {
     let theme = cx.theme();
-
-    let bg_secondary = theme.colors.surface_background;
-    let border_subtle = theme.colors.border_variant;
-    let interactive_hover = theme.colors.element_hover;
-    let accent_primary = theme.colors.accent;
-    let text_primary = theme.colors.text;
-    let text_muted = theme.colors.text_muted;
+    // One selection language: an active toggle is an accent fill with the
+    // text on it, like an active workspace.
+    let ink = ToggleInk::new(theme, active);
 
     div()
         .id(id)
@@ -319,42 +308,75 @@ fn render_simple_module(
         .flex_1()
         .px(Spacing::Medium.pixels())
         .py(Spacing::XSmall.pixels())
-        .rounded(Radius::Medium.pixels())
+        .rounded(surface_radius())
         .border_1()
-        .border_color(border_subtle)
-        .bg(bg_secondary)
+        .border_color(ink.border)
+        .bg(ink.background)
         .cursor_pointer()
-        .hover(move |s| s.bg(interactive_hover))
+        .hover(move |s| s.bg(ink.hover))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             on_click(cx);
         })
         .child(
             Icon::new(icon)
                 .size(IconSize::XSmall)
-                .color(Color::Custom(if active {
-                    accent_primary
-                } else {
-                    text_muted
-                })),
+                .color(Color::Custom(ink.icon)),
         )
         .child(
             div()
                 .flex()
                 .flex_col()
-                .gap(px(2.))
+                .gap(Spacing::XXSmall.pixels())
                 .child(
                     div()
                         .text_size(TextSize::XSmall.rems())
-                        .text_color(text_primary)
+                        .text_color(ink.text)
                         .child(label),
                 )
                 .child(
                     div()
                         .text_size(TextSize::XSmall.rems())
-                        .text_color(text_muted)
+                        .text_color(ink.muted)
                         .child(status),
                 ),
         )
+}
+
+/// Colours of a toggle card in one of its two states: accent-filled when
+/// on, a plain card when off.
+#[derive(Clone, Copy)]
+struct ToggleInk {
+    background: Hsla,
+    hover: Hsla,
+    border: Hsla,
+    icon: Hsla,
+    text: Hsla,
+    muted: Hsla,
+}
+
+impl ToggleInk {
+    fn new(theme: &ui::Theme, active: bool) -> Self {
+        let colors = theme.colors();
+        if active {
+            Self {
+                background: colors.accent,
+                hover: colors.accent.fade(Opacity::Soft),
+                border: colors.accent,
+                icon: colors.background,
+                text: colors.background,
+                muted: colors.background.fade(Opacity::Soft),
+            }
+        } else {
+            Self {
+                background: colors.surface_background,
+                hover: colors.element_hover,
+                border: colors.border_variant,
+                icon: colors.text_muted,
+                text: colors.text,
+                muted: colors.text_muted,
+            }
+        }
+    }
 }
 
 fn render_status_module(
@@ -381,7 +403,7 @@ fn render_status_module(
         .flex_1()
         .px(Spacing::Medium.pixels())
         .py(Spacing::XSmall.pixels())
-        .rounded(Radius::Medium.pixels())
+        .rounded(surface_radius())
         .border_1()
         .border_color(border_subtle)
         .bg(bg_secondary)
