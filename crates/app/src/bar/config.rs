@@ -258,6 +258,8 @@ pub struct BarConfig {
     /// other (the look of a blocky bar). Corners still follow the theme's
     /// `radius_scale`.
     pub widget_stretch: bool,
+    /// Optional monitor filter (e.g. "HDMI-A-1" or "primary"). If unset, opens on all monitors.
+    pub monitors: Option<String>,
     /// Start section widgets (left for horizontal, top for vertical).
     pub start: Vec<BarItem>,
     /// Center section widgets.
@@ -299,6 +301,7 @@ impl Default for BarConfig {
             widget_background: true,
             widget_border: true,
             widget_stretch: false,
+            monitors: None,
             start: vec!["LauncherBtn".into(), "Workspaces".into(), "SysInfo".into()],
             center: vec!["ActiveWindow".into()],
             end: vec![

@@ -30,6 +30,7 @@ impl OsdPosition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OsdConfig {
+    pub enabled: Option<bool>,
     pub position: OsdPosition,
     /// Opacity of the indicator's surface, from 0.0 to 1.0. Unset, it
     /// follows `opacity` in `theme.toml`.
@@ -39,6 +40,7 @@ pub struct OsdConfig {
 impl Default for OsdConfig {
     fn default() -> Self {
         Self {
+            enabled: Some(true),
             position: OsdPosition::Right,
             opacity: None,
         }

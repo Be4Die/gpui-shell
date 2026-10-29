@@ -87,13 +87,21 @@ fn open_with_config(display_id: Option<DisplayId>, cx: &mut App) -> bool {
 }
 
 fn open_all(cx: &mut App) -> usize {
+    if !cx.config().dock.enabled {
+        return 0;
+    }
     let mut opened = 0;
     let monitors = cx.config().dock.monitors;
     let displays = cx.displays();
 
     match monitors {
         DockMonitors::PrimaryOnly => {
-            if open_with_config(cx.primary_display().map(|display| display.id()), cx) {
+            let target_display = displays
+                .iter()
+                .find(|d| d.bounds().size.width > d.bounds().size.height)
+                .cloned()
+                .or_else(|| cx.primary_display());
+            if open_with_config(target_display.map(|display| display.id()), cx) {
                 opened += 1;
             }
         }

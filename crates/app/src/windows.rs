@@ -102,26 +102,24 @@ pub fn panel_placement_from_event(
     cx: &App,
     panel_size: Size<Pixels>,
 ) -> (Anchor, (f32, f32, f32, f32)) {
-    let (display_bounds, usable_bounds) = ShellWindows::display(cx, window)
-        .map(|display| (display.bounds(), display.visible_bounds()))
-        .unwrap_or_else(|| {
-            let bounds = window.bounds();
-            (bounds, bounds)
-        });
+    let display_size = ShellWindows::display(cx, window)
+        .map(|display| display.bounds().size)
+        .unwrap_or_else(|| window.bounds().size);
+    let display_bounds = Bounds {
+        origin: point(px(0.), px(0.)),
+        size: display_size,
+    };
     // The panel keeps the bar's own gap from the bar and the screen edges,
     // so it reads as part of the same layout rather than stuck to a corner.
     let gap = px(crate::config::Config::global(cx).bar.panel_gap());
     let usable_bounds = Bounds {
-        origin: point(usable_bounds.origin.x + gap, usable_bounds.origin.y + gap),
+        origin: point(gap, gap),
         size: size(
-            (usable_bounds.size.width - gap * 2.).max(px(0.)),
-            (usable_bounds.size.height - gap * 2.).max(px(0.)),
+            (display_size.width - gap * 2.).max(px(0.)),
+            (display_size.height - gap * 2.).max(px(0.)),
         ),
     };
-    let click = point(
-        window.bounds().origin.x + position.x,
-        window.bounds().origin.y + position.y,
-    );
+    let click = position;
     panel_placement_from_click(
         bar_position,
         click,

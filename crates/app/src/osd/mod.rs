@@ -229,6 +229,10 @@ fn schedule_dismiss(cx: &mut App) {
 ///
 /// Should be called once during app initialization.
 pub fn init(cx: &mut App) {
+    if !Config::global(cx).osd.enabled.unwrap_or(true) {
+        return;
+    }
+
     let audio_service = AppState::audio(cx).clone();
     let brightness_service = AppState::brightness(cx).clone();
     // Track initial values to only show OSD on changes (not on startup)

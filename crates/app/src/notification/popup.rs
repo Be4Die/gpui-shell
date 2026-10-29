@@ -333,10 +333,19 @@ fn popup_targets(cx: &App) -> Vec<Option<DisplayId>> {
     if displays.is_empty() {
         vec![None]
     } else {
-        displays
-            .into_iter()
-            .map(|display| Some(display.id()))
-            .collect()
+        let filter = cx.config().bar.monitors.clone();
+        if let Some(target) = filter {
+            let target_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, target.as_bytes());
+            if let Some(d) = displays.iter().find(|d| d.uuid().ok() == Some(target_uuid)) {
+                return vec![Some(d.id())];
+            }
+        }
+        let target = displays
+            .iter()
+            .find(|d| d.bounds().size.width > d.bounds().size.height)
+            .cloned()
+            .or_else(|| cx.primary_display());
+        vec![target.map(|d| d.id())]
     }
 }
 

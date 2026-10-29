@@ -171,6 +171,8 @@ impl DockGeometry {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockConfig {
+    /// Whether the dock is enabled.
+    pub enabled: bool,
     /// Screen edge the dock is anchored to. Independent of `bar.position`.
     pub position: BarPosition,
     /// Floating off the edge, or attached to it.
@@ -205,6 +207,7 @@ pub struct DockConfig {
 impl Default for DockConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             position: BarPosition::Bottom,
             style: DockStyle::default(),
             stretch: false,

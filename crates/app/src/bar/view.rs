@@ -266,6 +266,8 @@ pub fn open_with_config(display_id: Option<DisplayId>, cx: &mut App) -> bool {
 fn open_all_bar_windows(cx: &mut App) -> usize {
     let mut opened = 0usize;
     let displays = cx.displays();
+    let filter = cx.config().bar.monitors.clone();
+
     if displays.is_empty() {
         tracing::info!("No displays found, opening bar on default display");
         if open_with_config(None, cx) {
@@ -274,6 +276,14 @@ fn open_all_bar_windows(cx: &mut App) -> usize {
     } else {
         tracing::info!("Opening bar on {} displays", displays.len());
         for d in displays {
+            if let Some(target) = &filter {
+                let target_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, target.as_bytes());
+                if let Ok(u) = d.uuid() {
+                    if u != target_uuid {
+                        continue;
+                    }
+                }
+            }
             tracing::info!("Opening bar on display {:?}", d.id());
             if open_with_config(Some(d.id()), cx) {
                 opened += 1;
